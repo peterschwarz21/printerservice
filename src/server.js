@@ -5,6 +5,7 @@ const { isAllowed } = require('./allowlist');
 const { printMessage } = require('./printer');
 
 const app = express();
+app.set('trust proxy', true);
 app.use(express.urlencoded({ extended: false }));
 
 const PORT = process.env.PORT || 3000;
@@ -19,10 +20,14 @@ function twimlReply(res, message) {
 app.post('/webhook', (req, res) => {
   // Validate the request is genuinely from Twilio
   const signature = req.headers['x-twilio-signature'];
-  const url = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+  const forwardedProto = req.get('x-forwarded-proto');
+  const protocol = forwardedProto ? forwardedProto.split(',')[0].trim() : req.protocol;
+  const host = req.get('x-original-host') || req.get('host');
+  const url = `${protocol}://${host}${req.originalUrl}`;
   const isValid = twilio.validateRequest(TWILIO_AUTH_TOKEN, signature, url, req.body);
 
   if (!isValid) {
+    console.warn(`Twilio signature validation failed for URL: ${url}`);
     return res.status(403).send('Forbidden');
   }
 
