@@ -35,7 +35,7 @@ function formatMessage(text, from) {
 
   const parts = [
     border,
-    pad('📋 NEW TODO', LINE_WIDTH),
+    pad('NEW TODO', LINE_WIDTH),
     thin,
     pad(`${dateStr} ${timeStr}`, LINE_WIDTH),
     pad(`from ${from}`, LINE_WIDTH),
