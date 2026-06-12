@@ -1,0 +1,15 @@
+[Unit]
+Description=ngrok tunnel for the SMS webhook (static domain)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/printerservice
+ExecStart=/usr/local/bin/ngrok start --all --config /home/pi/printerservice/ngrok.yml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

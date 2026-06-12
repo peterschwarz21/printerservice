@@ -1,0 +1,17 @@
+[Unit]
+Description=Thermal print server (Flask + ESC/POS USB)
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+# Needs access to the USB printer device. Either add User to the right group:
+#   sudo usermod -aG plugdev,lp pi
+# or install a udev rule for your printer's vendor/product ID.
+WorkingDirectory=/home/pi/printerservice
+ExecStart=/home/pi/printerservice/.venv/bin/python printer/print_server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

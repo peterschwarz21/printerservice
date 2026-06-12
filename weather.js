@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 /**
- * morning_weather.js
+ * weather.js
  * Fetches today's weather and sends a formatted receipt to the thermal print server.
- * Cron: 0 7 * * * /usr/bin/node /home/pi/morning_weather.js
+ * Cron: 0 7 * * * cd /home/pi/printerservice && /usr/bin/node weather.js
  */
 
+require('dotenv').config();
+
 // ---------------------------------------------------------------------------
-// CONFIG
+// CONFIG (from .env)
 // ---------------------------------------------------------------------------
-const LAT        = 39.626781;
-const LON        = -105.102001;
-const PRINT_PORT = 5000;          // <-- change to your print server port
-const PRINT_URL  = `http://print-server:${PRINT_PORT}/print`;
-const WIDTH      = 48;
+const LAT       = process.env.WEATHER_LAT      || '39.7392';
+const LON       = process.env.WEATHER_LON      || '-104.9903';
+const TIMEZONE  = process.env.WEATHER_TIMEZONE || 'America/Denver';
+const PRINT_URL = process.env.PRINTER_URL      || 'http://localhost:5000/print';
+const WIDTH     = 48;
 
 // Open-Meteo weather code -> short description
 const WEATHER_CODES = {
@@ -64,7 +66,7 @@ function formatDate(date) {
     weekday: "short",
     month:   "short",
     day:     "numeric",
-    timeZone: "America/Denver",
+    timeZone: TIMEZONE,
   });
 }
 
@@ -90,7 +92,7 @@ async function fetchWeather() {
     ].join(","),
     temperature_unit: "fahrenheit",
     wind_speed_unit:  "mph",
-    timezone:         "America/Denver",
+    timezone:         TIMEZONE,
     forecast_days:    1,
   });
 

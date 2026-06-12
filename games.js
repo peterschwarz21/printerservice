@@ -4,12 +4,13 @@
  * Prints today's World Cup 2026 matches to the thermal print server.
  */
 
+require('dotenv').config();
+
 // ---------------------------------------------------------------------------
-// CONFIG
+// CONFIG (from .env)
 // ---------------------------------------------------------------------------
-const PRINT_PORT = 5000;
-const PRINT_URL  = `http://print-server:${PRINT_PORT}/print`;
-const WIDTH      = 48;
+const PRINT_URL = process.env.PRINTER_URL || 'http://localhost:5000/print';
+const WIDTH     = 48;
 
 const today = new Date().toISOString().slice(0,10);
 

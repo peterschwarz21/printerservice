@@ -1,7 +1,7 @@
 require('dotenv').config();
 const axios = require('axios');
 
-const PRINTER_URL = process.env.PRINTER_URL || 'http://printer-server';
+const PRINTER_URL = process.env.PRINTER_URL || 'http://localhost:5000/print';
 const LINE_WIDTH = 48;
 
 function pad(str, width) {
