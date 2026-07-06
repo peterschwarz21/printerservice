@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/printerservice
+User=admin
+WorkingDirectory=/home/admin/printerservice
 ExecStart=/usr/bin/node src/server.js
 Restart=always
 RestartSec=3

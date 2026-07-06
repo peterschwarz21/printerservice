@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/printerservice
-ExecStart=/usr/local/bin/ngrok start --all --config /home/pi/printerservice/ngrok.yml
+User=admin
+WorkingDirectory=/home/admin/printerservice
+ExecStart=/usr/local/bin/ngrok start --all --config /home/admin/printerservice/ngrok.yml
 Restart=always
 RestartSec=5
 
