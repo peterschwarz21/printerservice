@@ -259,6 +259,10 @@ printerservice/
 
 - **SMS not arriving** — `systemctl status ngrok sms-listener`; confirm the
   Twilio webhook URL matches your static domain and ends in `/webhook`.
+- **"Printing with USB connection requires a usb library"** — `pyusb` is
+  missing from the venv (python-escpos v3 made it an optional extra). Reinstall
+  with `.venv/bin/pip install -r printer/requirements.txt` (which requests
+  `python-escpos[usb]`) and restart: `sudo systemctl restart print_server`.
 - **Service fails with `status=203/EXEC`** — the binary path in the unit file
   is wrong. `sms-listener` expects nvm at `/home/admin/.nvm`; the `ngrok` unit
   expects `/usr/local/bin/ngrok`. Check with `ls ~/.nvm/nvm.sh` and
