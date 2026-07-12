@@ -1,0 +1,11 @@
+# Grant the printer's USB device node to the plugdev group so print_server.py
+# (running as a non-root user in plugdev) can open it via pyusb.
+#
+# idVendor/idProduct must match your printer — same values as
+# PRINTER_VENDOR_ID / PRINTER_PRODUCT_ID in .env, but WITHOUT the 0x prefix
+# (check with `lsusb`).
+#
+# Install:
+#   sudo cp deploy/99-thermal-printer.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5743", MODE="0660", GROUP="plugdev"

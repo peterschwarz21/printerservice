@@ -47,14 +47,19 @@ Two scheduled jobs (cron) also POST to the print server: `weather.js` and `games
 
   Put them in `.env` as `PRINTER_VENDOR_ID=0x0483` and `PRINTER_PRODUCT_ID=0x5743`.
 
-- The print server needs permission to talk to the USB device. The simplest
-  option is to add your user to the right groups:
+- The print server needs permission to open the raw USB device. Group
+  membership alone is **not** enough — `/dev/bus/usb/...` nodes are owned
+  `root:root` until a udev rule hands them to a group. Two steps:
 
   ```bash
-  sudo usermod -aG plugdev,lp admin
-  ```
+  # 1. Make sure the service user is in plugdev (then re-log or reboot)
+  sudo usermod -aG plugdev admin
 
-  (or install a udev rule for your printer's vendor/product ID).
+  # 2. Install the udev rule (edit the vendor/product IDs first if yours
+  #    differ from the defaults in deploy/99-thermal-printer.rules)
+  sudo cp deploy/99-thermal-printer.rules /etc/udev/rules.d/
+  sudo udevadm control --reload-rules && sudo udevadm trigger
+  ```
 
 ---
 
@@ -237,7 +242,8 @@ printerservice/
 ├── deploy/
 │   ├── print_server.service
 │   ├── sms-listener.service
-│   └── ngrok.service      # systemd units (start on boot)
+│   ├── ngrok.service      # systemd units (start on boot)
+│   └── 99-thermal-printer.rules  # udev rule (USB permissions)
 ├── weather.js             # Daily weather receipt (cron)
 ├── games.js               # World Cup 2026 daily matches (cron)
 ├── ngrok.yml.example      # ngrok static-domain config template
@@ -259,6 +265,11 @@ printerservice/
 
 - **SMS not arriving** — `systemctl status ngrok sms-listener`; confirm the
   Twilio webhook URL matches your static domain and ends in `/webhook`.
+- **"Access denied (insufficient permissions)" / `[Errno 13]`** — the udev
+  rule isn't installed or its IDs don't match your printer. Install
+  `deploy/99-thermal-printer.rules` (see [Hardware](#hardware)), confirm the
+  user is in `plugdev` (`groups admin`), then `sudo udevadm trigger` (or
+  replug the printer) and `sudo systemctl restart print_server`.
 - **"Printing with USB connection requires a usb library"** — `pyusb` is
   missing from the venv (python-escpos v3 made it an optional extra). Reinstall
   with `.venv/bin/pip install -r printer/requirements.txt` (which requests
