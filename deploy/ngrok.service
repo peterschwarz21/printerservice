@@ -7,6 +7,8 @@ Wants=network-online.target
 Type=simple
 User=admin
 WorkingDirectory=/home/admin/printerservice
+# Path assumes the tarball install from the README (`which ngrok` to confirm;
+# the apt package installs to /usr/bin/ngrok instead).
 ExecStart=/usr/local/bin/ngrok start --all --config /home/admin/printerservice/ngrok.yml
 Restart=always
 RestartSec=5

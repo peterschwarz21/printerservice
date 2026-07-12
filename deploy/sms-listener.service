@@ -7,7 +7,10 @@ Wants=network-online.target
 Type=simple
 User=admin
 WorkingDirectory=/home/admin/printerservice
-ExecStart=/usr/bin/node src/server.js
+# Node is installed via nvm, so there is no /usr/bin/node. Sourcing nvm.sh puts
+# the default node version on PATH (survives nvm upgrades); exec replaces the
+# shell so systemd signals reach node directly.
+ExecStart=/bin/bash -c '. /home/admin/.nvm/nvm.sh && exec node src/server.js'
 Restart=always
 RestartSec=3
 

@@ -51,7 +51,7 @@ Two scheduled jobs (cron) also POST to the print server: `weather.js` and `games
   option is to add your user to the right groups:
 
   ```bash
-  sudo usermod -aG plugdev,lp pi
+  sudo usermod -aG plugdev,lp admin
   ```
 
   (or install a udev rule for your printer's vendor/product ID).
@@ -60,9 +60,54 @@ Two scheduled jobs (cron) also POST to the print server: `weather.js` and `games
 
 ## Setup
 
-### 1. Clone and configure
+Everything below assumes a fresh **Raspberry Pi OS Lite (32-bit)** install with
+the default user **`admin`**, the repo at **`/home/admin/printerservice`**, and
+Node installed via **nvm**. If any of those differ, adjust the paths in the
+`deploy/*.service` files and the cron lines to match.
+
+### 1. Install system prerequisites
 
 ```bash
+sudo apt update
+sudo apt install -y git python3-venv libusb-1.0-0 libopenjp2-7
+```
+
+(`libusb` is for the USB printer; `libopenjp2` is a runtime dep of Pillow,
+which `python-escpos` pulls in.)
+
+**Node 18 via nvm:**
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+. ~/.bashrc   # or log out and back in
+nvm install 18
+node --version
+```
+
+> **Pi Zero / Pi 1 (ARMv6):** nodejs.org stopped publishing ARMv6 binaries
+> after Node 11, so a plain `nvm install 18` falls back to compiling from
+> source — which takes many hours on a Zero. Point nvm at the unofficial
+> builds instead:
+>
+> ```bash
+> NVM_NODEJS_ORG_MIRROR=https://unofficial-builds.nodejs.org/download/release nvm install 18
+> ```
+
+**ngrok** (the systemd unit expects it at `/usr/local/bin/ngrok`):
+
+```bash
+curl -sLo /tmp/ngrok.tgz https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-arm.tgz
+sudo tar -xzf /tmp/ngrok.tgz -C /usr/local/bin
+ngrok version
+```
+
+If `ngrok version` prints `Illegal instruction` on a Pi Zero, see
+[Troubleshooting](#troubleshooting).
+
+### 2. Clone and configure
+
+```bash
+cd ~
 git clone <your-repo-url> printerservice
 cd printerservice
 cp .env.example .env
@@ -81,10 +126,10 @@ Edit `.env` — a single file shared by **all** services:
 | `PRINTER_PORT` | Port for the Flask print server (default `5000`) |
 | `WEATHER_LAT` / `WEATHER_LON` / `WEATHER_TIMEZONE` | Location for the weather job |
 
-### 2. Install dependencies
+### 3. Install dependencies
 
 ```bash
-# Node (webhook + cron jobs)
+# Node (webhook + cron jobs) — slow on a Pi Zero's single core; let it finish
 npm ci
 
 # Python (print server)
@@ -92,10 +137,17 @@ python3 -m venv .venv
 .venv/bin/pip install -r printer/requirements.txt
 ```
 
-### 3. Install the systemd services
+Raspberry Pi OS preconfigures pip to use [piwheels](https://www.piwheels.org/),
+so Pillow installs as a prebuilt wheel. If pip starts *building* Pillow from
+source on a Pi Zero, stop and check that piwheels is in `/etc/pip.conf` —
+a source build can take hours or run out of memory.
 
-The unit files in `deploy/` assume the repo lives at `/home/pi/printerservice`
-and runs as user `pi`. Edit the `User=`, `WorkingDirectory=`, and `ExecStart=`
+### 4. Install the systemd services
+
+The unit files in `deploy/` assume the repo lives at `/home/admin/printerservice`,
+runs as user `admin`, and that nvm lives at `/home/admin/.nvm` (the
+`sms-listener` unit sources `nvm.sh` to find `node`, since nvm installs don't
+create `/usr/bin/node`). Edit the `User=`, `WorkingDirectory=`, and `ExecStart=`
 paths if yours differ, then:
 
 ```bash
@@ -110,7 +162,7 @@ Check status:
 systemctl status print_server sms-listener ngrok
 ```
 
-### 4. Set up ngrok (static domain — set once)
+### 5. Set up ngrok (static domain — set once)
 
 1. Create a free ngrok account and copy your authtoken.
 2. Claim a **free static domain** at <https://dashboard.ngrok.com/domains>.
@@ -124,7 +176,7 @@ systemctl status print_server sms-listener ngrok
    The `ngrok` systemd service serves this on boot. (`ngrok.yml` is gitignored —
    it holds your authtoken.)
 
-### 5. Point Twilio at the tunnel (once)
+### 6. Point Twilio at the tunnel (once)
 
 Because the ngrok domain is static, you only do this **one time**:
 
@@ -134,13 +186,16 @@ Because the ngrok domain is static, you only do this **one time**:
    - **HTTP Method**: `POST`
 3. Save.
 
-### 6. (Optional) Schedule the daily receipts
+### 7. (Optional) Schedule the daily receipts
 
-`crontab -e`, then add (cron doesn't load `.env`, so `cd` into the repo first):
+`crontab -e` (as `admin`), then add. Cron doesn't load `.env` (so `cd` into
+the repo first) and doesn't know about nvm (so source `nvm.sh` to get `node`
+on PATH):
 
 ```cron
-0 7 * * * cd /home/pi/printerservice && /usr/bin/node weather.js >> /tmp/weather.log 2>&1
-0 8 * * * cd /home/pi/printerservice && /usr/bin/node games.js   >> /tmp/games.log   2>&1
+SHELL=/bin/bash
+0 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node weather.js >> /tmp/weather.log 2>&1
+0 8 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node games.js   >> /tmp/games.log   2>&1
 ```
 
 ---
@@ -204,6 +259,22 @@ printerservice/
 
 - **SMS not arriving** — `systemctl status ngrok sms-listener`; confirm the
   Twilio webhook URL matches your static domain and ends in `/webhook`.
+- **Service fails with `status=203/EXEC`** — the binary path in the unit file
+  is wrong. `sms-listener` expects nvm at `/home/admin/.nvm`; the `ngrok` unit
+  expects `/usr/local/bin/ngrok`. Check with `ls ~/.nvm/nvm.sh` and
+  `which ngrok`, fix the unit, then `sudo systemctl daemon-reload` and restart.
+- **Service fails with `status=200/CHDIR`** — the repo isn't at
+  `/home/admin/printerservice`; fix `WorkingDirectory=` (and the paths in
+  `ExecStart=`) in the unit files.
+- **`ngrok: Illegal instruction` on a Pi Zero** — the ARM build you installed
+  was compiled for ARMv7, and the Zero is ARMv6. Try a different/older ngrok
+  ARM build, or run the tunnel from another machine on your network pointed at
+  `http://<pi-ip>:3000`.
+- **ngrok restarts repeatedly right after boot** — it's coming up before DNS is
+  ready. The unit waits on `network-online.target`, which only works if
+  `NetworkManager-wait-online.service` is enabled
+  (`sudo systemctl enable NetworkManager-wait-online`). Either way
+  `Restart=always` recovers on its own within a few retries.
 - **Test a job manually** — `node weather.js` or `node games.js` (each prints a
   preview to stdout before sending).
 

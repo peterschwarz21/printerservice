@@ -3,3 +3,5 @@ node_modules/
 .venv/
 ngrok.yml
 *.log
+__pycache__/
+.DS_Store

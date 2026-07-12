@@ -2,7 +2,7 @@
 /**
  * weather.js
  * Fetches today's weather and sends a formatted receipt to the thermal print server.
- * Cron: 0 7 * * * cd /home/pi/printerservice && /usr/bin/node weather.js
+ * Cron: 0 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node weather.js
  */
 
 require('dotenv').config();
