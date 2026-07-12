@@ -1,7 +1,9 @@
 require('dotenv').config();
 const axios = require('axios');
 
-const PRINTER_URL = process.env.PRINTER_URL || 'http://localhost:5000/print';
+// 127.0.0.1, not localhost: on Node 18 fetch/undici, localhost can resolve to
+// ::1 (IPv6) with no IPv4 fallback, and Flask only listens on IPv4.
+const PRINTER_URL = process.env.PRINTER_URL || 'http://127.0.0.1:5000/print';
 const LINE_WIDTH = 48;
 
 function pad(str, width) {

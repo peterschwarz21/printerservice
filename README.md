@@ -126,7 +126,7 @@ Edit `.env` — a single file shared by **all** services:
 | `TWILIO_PHONE_NUMBER` | Your Twilio number in E.164 (informational) |
 | `ALLOWED_NUMBERS` | Comma-separated E.164 numbers allowed to print |
 | `PORT` | Local port for the webhook server (default `3000`) |
-| `PRINTER_URL` | Print server endpoint (default `http://localhost:5000/print`) |
+| `PRINTER_URL` | Print server endpoint (default `http://127.0.0.1:5000/print` — keep the IP, not `localhost`; see Troubleshooting) |
 | `PRINTER_VENDOR_ID` / `PRINTER_PRODUCT_ID` | USB IDs from `lsusb` (hex, `0x…`) |
 | `PRINTER_PORT` | Port for the Flask print server (default `5000`) |
 | `WEATHER_LAT` / `WEATHER_LON` / `WEATHER_TIMEZONE` | Location for the weather job |
@@ -265,6 +265,10 @@ printerservice/
 
 - **SMS not arriving** — `systemctl status ngrok sms-listener`; confirm the
   Twilio webhook URL matches your static domain and ends in `/webhook`.
+- **`fetch failed` from the Node jobs, but `curl` to the print server works** —
+  `PRINTER_URL` (or the built-in default) points at `localhost`, which Node
+  18's `fetch` may resolve to IPv6 `::1` with no IPv4 fallback, while Flask
+  only listens on IPv4. Use `http://127.0.0.1:5000/print` in `.env`.
 - **"Access denied (insufficient permissions)" / `[Errno 13]`** — the udev
   rule isn't installed or its IDs don't match your printer. Install
   `deploy/99-thermal-printer.rules` (see [Hardware](#hardware)), confirm the

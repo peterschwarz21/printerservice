@@ -13,7 +13,8 @@ require('dotenv').config();
 const LAT       = process.env.WEATHER_LAT      || '39.7392';
 const LON       = process.env.WEATHER_LON      || '-104.9903';
 const TIMEZONE  = process.env.WEATHER_TIMEZONE || 'America/Denver';
-const PRINT_URL = process.env.PRINTER_URL      || 'http://localhost:5000/print';
+// 127.0.0.1, not localhost — see src/printer.js
+const PRINT_URL = process.env.PRINTER_URL      || 'http://127.0.0.1:5000/print';
 const WIDTH     = 48;
 
 // Open-Meteo weather code -> short description
@@ -182,6 +183,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("Error:", err.message);
+  // fetch() wraps the real network error (e.g. ECONNREFUSED) in err.cause
+  console.error("Error:", err.message, err.cause ? `(${err.cause})` : "");
   process.exit(1);
 });
