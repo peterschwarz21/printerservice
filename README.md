@@ -131,6 +131,9 @@ Edit `.env` — a single file shared by **all** services:
 | `PRINTER_PORT` | Port for the Flask print server (default `5000`) |
 | `WEATHER_LAT` / `WEATHER_LON` / `WEATHER_TIMEZONE` | Location for the weather job |
 
+> `.env` is read once at process startup. After editing it, restart the
+> services: `sudo systemctl restart print_server sms-listener`.
+
 ### 3. Install dependencies
 
 ```bash
