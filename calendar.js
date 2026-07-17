@@ -144,6 +144,23 @@ function formatTime(date) {
 // ---------------------------------------------------------------------------
 // FETCH EVENTS
 // ---------------------------------------------------------------------------
+// Descriptions can contain HTML; strip tags, decode common entities, collapse
+// whitespace, and keep the first 100 characters.
+function cleanDescription(html) {
+  if (!html) return '';
+  const text = html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > 100 ? text.slice(0, 100).trimEnd() + '...' : text;
+}
+
 async function fetchCalendar(token, calendar, timeMin, timeMax) {
   const params = new URLSearchParams({
     timeMin:      timeMin.toISOString(),
@@ -151,7 +168,7 @@ async function fetchCalendar(token, calendar, timeMin, timeMax) {
     singleEvents: 'true',
     orderBy:      'startTime',
     maxResults:   '50',
-    fields:       'items(summary,start,end,status)',
+    fields:       'items(summary,location,description,start,end,status)',
   });
   const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar.id)}/events?${params}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -160,11 +177,13 @@ async function fetchCalendar(token, calendar, timeMin, timeMax) {
   return (data.items || [])
     .filter((ev) => ev.status !== 'cancelled')
     .map((ev) => ({
-      label:  calendar.label,
-      title:  ev.summary || '(no title)',
-      allDay: !ev.start.dateTime,
-      start:  ev.start.dateTime ? new Date(ev.start.dateTime) : null,
-      end:    ev.end?.dateTime ? new Date(ev.end.dateTime) : null,
+      label:       calendar.label,
+      title:       ev.summary || '(no title)',
+      location:    (ev.location || '').trim(),
+      description: cleanDescription(ev.description),
+      allDay:      !ev.start.dateTime,
+      start:       ev.start.dateTime ? new Date(ev.start.dateTime) : null,
+      end:         ev.end?.dateTime ? new Date(ev.end.dateTime) : null,
     }));
 }
 
@@ -192,12 +211,19 @@ function wrap(text, width) {
   return lines.length ? lines : [''];
 }
 
-// One event as receipt lines: prefix on the first line, continuation indented
-function eventLines(prefix, title) {
-  const titleWidth = WIDTH - prefix.length;
-  const wrapped = wrap(title, titleWidth);
+// One event as receipt lines: prefix on the first line, everything else
+// (wrapped title, location, description) indented to line up under it
+function eventLines(prefix, ev) {
+  const width = WIDTH - prefix.length;
   const indent = ' '.repeat(prefix.length);
-  return wrapped.map((line, i) => (i === 0 ? prefix : indent) + line);
+  const lines = wrap(ev.title, width).map((line, i) => (i === 0 ? prefix : indent) + line);
+  if (ev.location) {
+    lines.push(...wrap(`@ ${ev.location}`, width).map((line) => indent + line));
+  }
+  if (ev.description) {
+    lines.push(...wrap(ev.description, width).map((line) => indent + line));
+  }
+  return lines;
 }
 
 function formatReceipt(events, warnings) {
@@ -225,7 +251,7 @@ function formatReceipt(events, warnings) {
   if (allDay.length > 0) {
     lines.push('ALL DAY', THIN);
     for (const ev of allDay) {
-      lines.push(...eventLines(` [${ev.label}] `, ev.title));
+      lines.push(...eventLines(` [${ev.label}] `, ev));
     }
     lines.push('');
   }
@@ -236,7 +262,7 @@ function formatReceipt(events, warnings) {
       const time = ev.end
         ? `${formatTime(ev.start)}-${formatTime(ev.end).trimStart()}`
         : formatTime(ev.start);
-      lines.push(...eventLines(`${time.padEnd(13)} [${ev.label}] `, ev.title));
+      lines.push(...eventLines(`${time.padEnd(13)} [${ev.label}] `, ev));
     }
     lines.push('');
   }
