@@ -1,12 +1,12 @@
 {
   "name": "thermalprint",
   "version": "1.0.0",
-  "description": "Text a Twilio number and it prints on your thermal receipt printer, plus daily weather & World Cup receipts.",
+  "description": "Text a Twilio number and it prints on your thermal receipt printer, plus daily weather & Google Calendar receipts.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "weather": "node weather.js",
-    "games": "node games.js"
+    "calendar": "node calendar.js"
   },
   "keywords": [
     "thermal-printer",
