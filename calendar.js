@@ -328,6 +328,13 @@ async function main() {
     }
   });
 
+  // Nothing worth printing: no events and no calendar failures to report.
+  // Skip the receipt entirely so an empty day doesn't waste paper.
+  if (events.length === 0 && warnings.length === 0) {
+    console.log('No events today — nothing to print.');
+    return;
+  }
+
   console.log('Formatting receipt...');
   const receipt = formatReceipt(events, warnings);
 
