@@ -1,8 +1,8 @@
 # Thermal Print SMS Service
 
 Text a message to your Twilio number and it prints on a thermal receipt printer
-wired to a Raspberry Pi. Includes optional daily **weather** and **Google
-Calendar** receipts on a schedule.
+wired to a Raspberry Pi. Includes optional daily **weather**, **Google
+Calendar**, and **poem** receipts on a schedule.
 
 ## How it works
 
@@ -20,7 +20,8 @@ Calendar** receipts on a schedule.
                                                  thermal printer
 
   weather.js   (cron, 7:00am) ─┐
-  calendar.js  (cron, 7:02am) ─┴─►  print_server.py  ──►  printer
+  calendar.js  (cron, 7:02am) ─┼─►  print_server.py  ──►  printer
+  poem.js      (cron, 7:04am) ─┘
 ```
 
 Three long-running services (managed by **systemd**, start on boot):
@@ -31,7 +32,8 @@ Three long-running services (managed by **systemd**, start on boot):
 | `sms-listener` | `src/server.js` | Express webhook that receives Twilio SMS and forwards to the print server |
 | `ngrok` | `ngrok.yml` | Public tunnel (static domain) so Twilio can reach the webhook |
 
-Two scheduled jobs (cron) also POST to the print server: `weather.js` and `calendar.js`.
+Three scheduled jobs (cron) also POST to the print server: `weather.js`,
+`calendar.js`, and `poem.js`.
 
 ---
 
@@ -134,6 +136,8 @@ Edit `.env` — a single file shared by **all** services:
 | `GOOGLE_OAUTH_TOKEN` | Optional path to the refresh-token file (default `./google-token.json`) |
 | `CALENDAR_IDS` | Comma-separated `calendarId:Label` pairs for the calendar job |
 | `CALENDAR_TIMEZONE` | Optional; the calendar job falls back to `WEATHER_TIMEZONE` |
+| `POEM_MAX_LINES` | Optional; max poem length for the poem job (default `12`) |
+| `POEM_API_BASE` | Optional; PoetryDB base URL (default `https://poetrydb.org`) |
 
 > `.env` is read once at process startup. After editing it, restart the
 > services: `sudo systemctl restart print_server sms-listener`.
@@ -263,18 +267,56 @@ calendars work fine.
 10. Test: `node calendar.js` (prints a preview to stdout before sending).
     Adding another account later is just steps 8–9 for that account.
 
-### 8. (Optional) Schedule the daily receipts
+### 8. (Optional) Daily poem receipt
+
+`poem.js` prints a short public-domain poem each day. It uses the free
+[PoetryDB](https://poetrydb.org) API — **no key and no account required** — and
+needs no extra npm packages (it uses the same native `fetch` as the weather
+job). Poems are kept short by pulling only ones up to `POEM_MAX_LINES` lines
+(default 12); lower it in `.env` for even shorter receipts.
+
+Test it (prints a preview to stdout before sending):
+
+```bash
+node poem.js
+```
+
+### 9. (Optional) Schedule the daily receipts
 
 `crontab -e` (as `admin`), then add. Cron doesn't load `.env` (so `cd` into
 the repo first) and doesn't know about nvm (so source `nvm.sh` to get `node`
-on PATH). The calendar job is staggered 2 minutes after weather so the
-receipts always print in the same order:
+on PATH). The jobs are staggered 2 minutes apart so the receipts always print
+in the same order:
 
 ```cron
 SHELL=/bin/bash
 0 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node weather.js  >> /tmp/weather.log  2>&1
 2 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node calendar.js >> /tmp/calendar.log 2>&1
+4 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node poem.js     >> /tmp/poem.log     2>&1
 ```
+
+---
+
+## Adding the poem job to an already-running instance
+
+If the printer service is already installed on your Pi and you just want to add
+the daily poem, you don't need to touch systemd, npm, or the Python print
+server — `poem.js` is a one-shot cron script with no new dependencies:
+
+```bash
+cd /home/admin/printerservice
+git pull                       # pulls poem.js
+
+# Dry-run: fetches a poem, prints a PREVIEW to stdout, then a real receipt
+# (the print server must be running: `systemctl status print_server`)
+npm run poem                   # or: node poem.js
+
+# Schedule it — `crontab -e` and add this line (staggered after the others):
+# 4 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node poem.js >> /tmp/poem.log 2>&1
+```
+
+Optionally set `POEM_MAX_LINES` in `.env` to change the length cap (no restart
+needed — cron jobs read `.env` fresh on each run).
 
 ---
 
@@ -319,6 +361,7 @@ printerservice/
 │   └── 99-thermal-printer.rules  # udev rule (USB permissions)
 ├── weather.js             # Daily weather receipt (cron)
 ├── calendar.js            # Daily Google Calendar receipt (cron)
+├── poem.js                # Daily poem receipt via PoetryDB (cron)
 ├── authorize.js           # One-time Google OAuth setup (run on a laptop)
 ├── ngrok.yml.example      # ngrok static-domain config template
 ├── .env.example           # Shared config template
@@ -368,8 +411,8 @@ printerservice/
   `NetworkManager-wait-online.service` is enabled
   (`sudo systemctl enable NetworkManager-wait-online`). Either way
   `Restart=always` recovers on its own within a few retries.
-- **Test a job manually** — `node weather.js` or `node calendar.js` (each
-  prints a preview to stdout before sending).
+- **Test a job manually** — `node weather.js`, `node calendar.js`, or
+  `node poem.js` (each prints a preview to stdout before sending).
 - **Calendar receipt shows `Could not load calendar [X] (HTTP 404)`** — that
   calendar isn't shared with the hub account, the ID in `CALENDAR_IDS` is
   wrong, or the share hasn't propagated yet (give it a few minutes). Re-check

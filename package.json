@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "weather": "node weather.js",
-    "calendar": "node calendar.js"
+    "calendar": "node calendar.js",
+    "poem": "node poem.js"
   },
   "keywords": [
     "thermal-printer",
