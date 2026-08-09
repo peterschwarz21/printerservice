@@ -3,6 +3,8 @@ const express = require('express');
 const twilio = require('twilio');
 const { isAllowed } = require('./allowlist');
 const { printMessage } = require('./printer');
+const { parseReminder, TIMEZONE } = require('./reminder-parser');
+const { addReminder } = require('./reminders-store');
 
 const app = express();
 app.set('trust proxy', true);
@@ -41,6 +43,19 @@ app.post('/webhook', (req, res) => {
 
   if (!body) {
     return twimlReply(res, '⚠️ Empty message received — nothing to print!');
+  }
+
+  // Reminders: "remind me at 7pm to take out the trash" -> schedule, don't print now.
+  // Falls through to immediate printing when there's no time to parse.
+  const { fireAt, body: reminderBody } = parseReminder(body, new Date());
+  if (fireAt && fireAt.getTime() > Date.now()) {
+    addReminder({ from, body: reminderBody, fireAt, original: body });
+    const when = fireAt.toLocaleString('en-US', {
+      weekday: 'short', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', hour12: true, timeZone: TIMEZONE,
+    });
+    console.log(`Scheduled reminder from ${from} for ${when}: "${reminderBody}"`);
+    return twimlReply(res, `⏰ Reminder set for ${when}: "${reminderBody}"`);
   }
 
   console.log(`Printing message from ${from}: "${body}"`);

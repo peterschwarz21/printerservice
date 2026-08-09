@@ -1,6 +1,7 @@
 node_modules/
 .env
 google-token.json
+reminders.json
 .venv/
 ngrok.yml
 *.log

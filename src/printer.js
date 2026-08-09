@@ -13,7 +13,7 @@ function pad(str, width) {
   return ' '.repeat(leftPad) + str + ' '.repeat(width - len - leftPad);
 }
 
-function formatMessage(text, from) {
+function formatMessage(text, from, header = 'NEW TODO') {
   const border = '═'.repeat(LINE_WIDTH);
   const thin = '─'.repeat(LINE_WIDTH);
 
@@ -37,7 +37,7 @@ function formatMessage(text, from) {
 
   const parts = [
     border,
-    pad('NEW TODO', LINE_WIDTH),
+    pad(header, LINE_WIDTH),
     thin,
     pad(`${dateStr} ${timeStr}`, LINE_WIDTH),
     pad(`from ${from}`, LINE_WIDTH),
@@ -53,8 +53,8 @@ function formatMessage(text, from) {
   return parts.join('\n');
 }
 
-async function printMessage(text, from) {
-  const content = formatMessage(text, from);
+async function printMessage(text, from, opts = {}) {
+  const content = formatMessage(text, from, opts.header);
   await axios.post(PRINTER_URL, { content });
 }
 

@@ -19,9 +19,10 @@ Calendar**, and **poem** receipts on a schedule.
                                                       ▼
                                                  thermal printer
 
-  weather.js   (cron, 7:00am) ─┐
-  calendar.js  (cron, 7:02am) ─┼─►  print_server.py  ──►  printer
-  poem.js      (cron, 7:04am) ─┘
+  weather.js   (cron, 7:00am)  ─┐
+  calendar.js  (cron, 7:02am)  ─┼─►  print_server.py  ──►  printer
+  poem.js      (cron, 7:04am)  ─┤
+  reminders.js (cron, 1/min)   ─┘   prints scheduled "remind me" texts when due
 ```
 
 Three long-running services (managed by **systemd**, start on boot):
@@ -32,8 +33,9 @@ Three long-running services (managed by **systemd**, start on boot):
 | `sms-listener` | `src/server.js` | Express webhook that receives Twilio SMS and forwards to the print server |
 | `ngrok` | `ngrok.yml` | Public tunnel (static domain) so Twilio can reach the webhook |
 
-Three scheduled jobs (cron) also POST to the print server: `weather.js`,
-`calendar.js`, and `poem.js`.
+Scheduled jobs (cron) also POST to the print server: `weather.js`, `calendar.js`,
+and `poem.js` (daily), plus `reminders.js` (every minute, prints "remind me" texts
+when their time arrives).
 
 ---
 
@@ -290,10 +292,15 @@ in the same order:
 
 ```cron
 SHELL=/bin/bash
-0 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node weather.js  >> /tmp/weather.log  2>&1
-2 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node calendar.js >> /tmp/calendar.log 2>&1
-4 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node poem.js     >> /tmp/poem.log     2>&1
+0 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node weather.js   >> /tmp/weather.log   2>&1
+2 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node calendar.js  >> /tmp/calendar.log  2>&1
+4 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node poem.js      >> /tmp/poem.log      2>&1
+* * * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node reminders.js >> /tmp/reminders.log 2>&1
 ```
+
+The last line runs every minute — it's what makes "remind me ..." texts fire (see
+[Usage](#usage)). It exits immediately when nothing is due, so it's cheap to run
+that often.
 
 ---
 
@@ -320,11 +327,54 @@ needed — cron jobs read `.env` fresh on each run).
 
 ---
 
+## Adding the reminders feature to an already-running instance
+
+Unlike the poem job, reminders touch the webhook server and add a dependency
+(`chrono-node`), so this needs an `npm install` and a server restart:
+
+```bash
+cd /home/admin/printerservice
+git pull
+npm install                    # pulls in chrono-node
+
+# Restart the webhook so it recognizes "remind me ..." texts
+sudo systemctl restart sms-listener
+
+# Schedule the sweeper — `crontab -e` and add this line:
+# * * * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node reminders.js >> /tmp/reminders.log 2>&1
+```
+
+Optionally set `REMINDER_DEFAULT_HOUR` in `.env` (default `8`) for reminders that
+name a day but no time. Pending reminders are stored in `reminders.json` (created
+automatically, gitignored) and survive reboots — the sweeper prints them whenever
+their time has passed, independent of the webhook server.
+
+---
+
 ## Usage
 
 Text any message to your Twilio number from an allowed phone number. It gets
 wrapped in an ASCII border with a timestamp and printed. You get a confirmation
 text back; numbers not on the allowlist are rejected.
+
+### Reminders
+
+Start a text with **"remind me"** and include a time to schedule it instead of
+printing right away. The message prints (labeled `REMINDER`) at the requested
+time, and you get an immediate confirmation text like
+`⏰ Reminder set for Sun, Aug 9, 7:00 PM: "take out the trash"`.
+
+```
+"Remind me at 7pm to take out the trash"   -> prints "take out the trash" at 7pm
+"In 2 days remind me to take out the trash" -> prints it in 2 days at 8:00 AM
+"Remind me tomorrow to call mom"            -> prints "call mom" tomorrow at 8:00 AM
+"Remind me in 20 minutes to check the oven" -> prints "check the oven" in 20 min
+```
+
+Times understood include clock times (`at 7pm`, `at 10:30am`), relative offsets
+(`in 20 minutes`, `in 2 hours`), and days (`tomorrow`, `in 2 days`, `next Monday`).
+When only a day is given, it fires at 8:00 AM (`REMINDER_DEFAULT_HOUR`). If a
+message says "remind me" but no time can be parsed, it just prints immediately.
 
 **Example output:**
 
@@ -350,6 +400,8 @@ printerservice/
 ├── src/
 │   ├── server.js          # Express webhook server (Twilio -> printer)
 │   ├── printer.js         # Message formatter + POST to print server
+│   ├── reminder-parser.js # Parses "remind me ..." texts (chrono-node)
+│   ├── reminders-store.js # JSON persistence for pending reminders
 │   └── allowlist.js       # Phone number allowlist
 ├── printer/
 │   ├── print_server.py    # Flask ESC/POS print server (USB)
@@ -362,6 +414,7 @@ printerservice/
 ├── weather.js             # Daily weather receipt (cron)
 ├── calendar.js            # Daily Google Calendar receipt (cron)
 ├── poem.js                # Daily poem receipt via PoetryDB (cron)
+├── reminders.js           # Prints due "remind me" reminders (cron, every minute)
 ├── authorize.js           # One-time Google OAuth setup (run on a laptop)
 ├── ngrok.yml.example      # ngrok static-domain config template
 ├── .env.example           # Shared config template
