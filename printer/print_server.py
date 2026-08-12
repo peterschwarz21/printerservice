@@ -133,20 +133,32 @@ def _load_fonts():
                 _font_cache = False
                 return None
 
-        target_cell = IMAGE_WIDTH / LINE_WIDTH  # dots per character column
-        # Pick the base font size whose advance width best matches target_cell.
-        size = 8
-        base_font = ImageFont.truetype(base_path, size)
-        while size < 200:
-                nxt = ImageFont.truetype(base_path, size + 1)
-                if nxt.getlength("M") > target_cell:
-                        break
-                base_font, size = nxt, size + 1
+        try:
+                target_cell = IMAGE_WIDTH / LINE_WIDTH  # dots per character column
+                # Pick the base font size whose advance width best matches target_cell.
+                size = 8
+                base_font = ImageFont.truetype(base_path, size)
+                while size < 200:
+                        nxt = ImageFont.truetype(base_path, size + 1)
+                        if nxt.getlength("M") > target_cell:
+                                break
+                        base_font, size = nxt, size + 1
 
-        cell_w = max(int(round(base_font.getlength("M"))), 1)
-        ascent, descent = base_font.getmetrics()
-        line_h = ascent + descent
-        emoji_font = _load_emoji_font(emoji_path, line_h, emoji_is_color)
+                cell_w = max(int(round(base_font.getlength("M"))), 1)
+                ascent, descent = base_font.getmetrics()
+                line_h = ascent + descent
+                emoji_font = _load_emoji_font(emoji_path, line_h, emoji_is_color)
+        except Exception as e:
+                # e.g. Pillow built without FreeType (missing libfreetype.so.6).
+                # Disable emoji rendering rather than 500 every print request.
+                log.warning(
+                        "Emoji rendering DISABLED (falling back to '?'): could not load "
+                        "fonts (base=%s emoji=%s): %s. If this is 'libfreetype.so.6: "
+                        "cannot open shared object file', run: sudo apt install -y "
+                        "libfreetype6.", base_path, emoji_path, e,
+                )
+                _font_cache = False
+                return None
 
         log.info(
                 "Emoji rendering ENABLED: base_font=%s emoji_font=%s (color=%s) "

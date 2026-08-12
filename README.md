@@ -78,12 +78,14 @@ Node installed via **nvm**. If any of those differ, adjust the paths in the
 
 ```bash
 sudo apt update
-sudo apt install -y git python3-venv libusb-1.0-0 libopenjp2-7 \
+sudo apt install -y git python3-venv libusb-1.0-0 libopenjp2-7 libfreetype6 \
     fonts-dejavu-core fonts-noto-color-emoji
 ```
 
-(`libusb` is for the USB printer; `libopenjp2` is a runtime dep of Pillow,
-which `python-escpos` pulls in. The two font packages are for emoji: the
+(`libusb` is for the USB printer; `libopenjp2` and `libfreetype6` are runtime
+deps of Pillow, which `python-escpos` pulls in — `libfreetype6` is what lets
+Pillow rasterize text for the emoji feature; without it any `ImageFont` call
+raises `libfreetype.so.6: cannot open shared object file`. The two font packages are for emoji: the
 printer's text mode can't encode emoji — they'd print as `?` — so messages
 containing them are rendered to a bitmap and printed as an image.
 `fonts-dejavu-core` provides the monospace base font (**DejaVu Sans Mono**) that
