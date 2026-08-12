@@ -1,4 +1,6 @@
+import glob
 import io
+import logging
 import os
 import textwrap
 from urllib.parse import unquote
@@ -10,6 +12,9 @@ from PIL import Image, ImageOps, ImageDraw, ImageFont
 
 # Load shared .env from the repo root (one level up from this file)
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("print_server")
 
 app = Flask(__name__)
 
@@ -30,16 +35,39 @@ LINE_WIDTH = 48
 # workaround: when a message contains such characters, rasterize the whole block
 # to a bitmap with an emoji-capable font and print it through p.image() instead.
 
-# Monospace base font: keeps the box borders (═ ─) and centered padding aligned.
-BASE_FONT_PATHS = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",  # Raspberry Pi OS / Debian
-        "/System/Library/Fonts/Menlo.ttc",                      # macOS dev fallback
+# Where to hunt for fonts. We glob these recursively rather than hardcode exact
+# paths, because different distros/packages drop the same font in different dirs.
+FONT_DIRS = [
+        "/usr/share/fonts",
+        "/usr/local/share/fonts",
+        os.path.expanduser("~/.fonts"),
+        "/Library/Fonts",          # macOS dev
+        "/System/Library/Fonts",   # macOS dev
 ]
-# Monochrome Noto Emoji (NOT the color build): renders clean 1-bit glyphs that a
-# thermal head can print. The color font would need embedded_color + thresholding.
-EMOJI_FONT_PATHS = [
-        "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
-        "/usr/share/fonts/truetype/ancient-scripts/NotoEmoji-Regular.ttf",
+# Monospace base font (filename patterns, most-preferred first): keeps the box
+# borders (═ ─) and centered padding aligned. fonts-dejavu-core provides the first.
+BASE_FONT_NAMES = [
+        "DejaVuSansMono.ttf",
+        "LiberationMono-Regular.ttf",
+        "DejaVuSansMono-Bold.ttf",
+        "Menlo.ttc",
+]
+# Monochrome emoji fonts, preferred: they render clean 1-bit glyphs a thermal head
+# can print directly. fonts-noto-core (or fonts-noto) provides NotoEmoji-Regular.
+MONO_EMOJI_NAMES = [
+        "NotoEmoji-Regular.ttf",
+        "NotoEmoji-VariableFont_wght.ttf",
+        "Symbola.ttf",
+        "Symbola_hint.ttf",
+]
+# Color emoji fonts, accepted as a fallback. fonts-noto-color-emoji provides the
+# first. These are color bitmap fonts, so we render them with embedded_color and
+# flatten to grayscale — messier than mono, but far better than "?".
+COLOR_EMOJI_NAMES = [
+        "NotoColorEmoji.ttf",
+        "AppleColorEmoji.ttf",
+        "Apple Color Emoji.ttc",
+        "seguiemj.ttf",
 ]
 
 # Unicode ranges that the printer can't render as text and that should trigger
@@ -65,27 +93,43 @@ def needs_image_mode(text):
         return any(is_emoji_char(c) for c in text)
 
 
-def _first_existing(paths):
-        for path in paths:
-                if os.path.exists(path):
-                        return path
+def _find_font(names):
+        """Return the first existing font path matching `names` (in priority
+        order), searched recursively under FONT_DIRS."""
+        for name in names:
+                for d in FONT_DIRS:
+                        hits = glob.glob(os.path.join(d, "**", name), recursive=True)
+                        if hits:
+                                return sorted(hits)[0]
         return None
 
 
-# Lazily built once and cached: (base_font, emoji_font, cell_w, line_h).
+# Lazily built once and cached:
+# (base_font, emoji_font, cell_w, line_h, emoji_is_color). False = unavailable.
 _font_cache = None
 
 
 def _load_fonts():
         """Load the monospace + emoji fonts, sizing them so LINE_WIDTH columns
-        fill the printer width. Returns None if the fonts aren't installed."""
+        fill the printer width. Returns None (and logs why) if fonts are missing."""
         global _font_cache
         if _font_cache is not None:
-                return _font_cache
+                return _font_cache or None
 
-        base_path = _first_existing(BASE_FONT_PATHS)
-        emoji_path = _first_existing(EMOJI_FONT_PATHS)
+        base_path = _find_font(BASE_FONT_NAMES)
+        emoji_path = _find_font(MONO_EMOJI_NAMES)
+        emoji_is_color = False
+        if not emoji_path:
+                emoji_path = _find_font(COLOR_EMOJI_NAMES)
+                emoji_is_color = bool(emoji_path)
+
         if not base_path or not emoji_path:
+                log.warning(
+                        "Emoji rendering DISABLED (falling back to '?'): base_font=%s "
+                        "emoji_font=%s. Install: sudo apt install -y fonts-dejavu-core "
+                        "fonts-noto-core (or fonts-noto-color-emoji).",
+                        base_path, emoji_path,
+                )
                 _font_cache = False
                 return None
 
@@ -102,23 +146,68 @@ def _load_fonts():
         cell_w = max(int(round(base_font.getlength("M"))), 1)
         ascent, descent = base_font.getmetrics()
         line_h = ascent + descent
-        # Emoji glyphs are square; size them to the line height so they read at
-        # text scale (they may bleed slightly past one column, which is fine in
-        # the free-text body where emoji actually appear).
-        emoji_font = ImageFont.truetype(emoji_path, line_h)
+        emoji_font = _load_emoji_font(emoji_path, line_h, emoji_is_color)
 
-        _font_cache = (base_font, emoji_font, cell_w, line_h)
+        log.info(
+                "Emoji rendering ENABLED: base_font=%s emoji_font=%s (color=%s) "
+                "cell_w=%d line_h=%d", base_path, emoji_path, emoji_is_color,
+                cell_w, line_h,
+        )
+        _font_cache = (base_font, emoji_font, cell_w, line_h, emoji_is_color)
         return _font_cache
+
+
+def _load_emoji_font(path, line_h, is_color):
+        """Load the emoji font at line height. Color bitmap fonts (e.g.
+        NotoColorEmoji) only ship fixed strike sizes, so fall back to one of
+        those and let the per-glyph tile downscale."""
+        if not is_color:
+                return ImageFont.truetype(path, line_h)
+        try:
+                return ImageFont.truetype(path, line_h)
+        except OSError:
+                for strike in (109, 128, 136, 160):
+                        try:
+                                return ImageFont.truetype(path, strike)
+                        except OSError:
+                                continue
+                raise
+
+
+def _paste_emoji(base_img, ch, x, y, cell_w, line_h, emoji_font, is_color):
+        """Render one emoji glyph to its own tile, flatten to grayscale, scale to
+        the line height, and paste it centered in its column. Handles both mono
+        and color fonts; never raises (a failed glyph is just skipped)."""
+        try:
+                tile = Image.new("RGBA", (line_h * 3, line_h * 3), (255, 255, 255, 0))
+                ImageDraw.Draw(tile).text(
+                        (0, 0), ch, font=emoji_font,
+                        embedded_color=is_color, fill=(0, 0, 0),
+                )
+                bbox = tile.getbbox()
+                if not bbox:
+                        return
+                glyph = tile.crop(bbox)
+                scale = line_h / glyph.height
+                gw = max(1, int(round(glyph.width * scale)))
+                gh = max(1, int(round(glyph.height * scale)))
+                glyph = glyph.resize((gw, gh), Image.LANCZOS)
+                flat = Image.new("RGBA", glyph.size, (255, 255, 255, 255))
+                flat.alpha_composite(glyph)
+                dx = int(x + max((cell_w - gw) // 2, 0))
+                base_img.paste(flat.convert("L"), (dx, int(y)))
+        except Exception as e:
+                log.warning("skipped emoji %r: %s", ch, e)
 
 
 def render_text_image(text):
         """Rasterize `text` (already laid out with \\n) onto a monospace grid,
-        drawing emoji with the emoji font. Returns a 1-bit-friendly L image, or
-        None if fonts are unavailable."""
+        drawing emoji with the emoji font. Returns an L image, or None if fonts
+        are unavailable."""
         fonts = _load_fonts()
         if not fonts:
                 return None
-        base_font, emoji_font, cell_w, line_h = fonts
+        base_font, emoji_font, cell_w, line_h, emoji_is_color = fonts
 
         lines = text.split("\n")
         cols = max((len(line) for line in lines), default=0)
@@ -133,11 +222,14 @@ def render_text_image(text):
                         if ch == " ":
                                 continue
                         x = col * cell_w
-                        font = emoji_font if is_emoji_char(ch) else base_font
-                        # Center the glyph within its column.
-                        glyph_w = draw.textlength(ch, font=font)
-                        dx = max((cell_w - glyph_w) / 2, 0)
-                        draw.text((x + dx, y), ch, font=font, fill=0)
+                        if is_emoji_char(ch):
+                                _paste_emoji(img, ch, x, y, cell_w, line_h,
+                                             emoji_font, emoji_is_color)
+                        else:
+                                # Center the glyph within its column.
+                                glyph_w = draw.textlength(ch, font=base_font)
+                                dx = max((cell_w - glyph_w) / 2, 0)
+                                draw.text((x + dx, y), ch, font=base_font, fill=0)
 
         if img.width > IMAGE_WIDTH:
                 h = round(img.height * IMAGE_WIDTH / img.width)
