@@ -4,6 +4,8 @@ const axios = require('axios');
 // 127.0.0.1, not localhost: on Node 18 fetch/undici, localhost can resolve to
 // ::1 (IPv6) with no IPv4 fallback, and Flask only listens on IPv4.
 const PRINTER_URL = process.env.PRINTER_URL || 'http://127.0.0.1:5000/print';
+// Derive the image endpoint from PRINTER_URL so it tracks the same host/port.
+const PRINTER_IMAGE_URL = process.env.PRINTER_IMAGE_URL || PRINTER_URL.replace(/\/print$/, '/print-image');
 const LINE_WIDTH = 48;
 
 function pad(str, width) {
@@ -58,4 +60,15 @@ async function printMessage(text, from, opts = {}) {
   await axios.post(PRINTER_URL, { content });
 }
 
-module.exports = { printMessage };
+// Print an image (MMS). The raw bytes go in the body; caption/sender ride along
+// as URL-encoded headers so the Flask side can keep the body purely binary.
+async function printImage(imageBuffer, from, opts = {}) {
+  const headers = {
+    'Content-Type': opts.contentType || 'application/octet-stream',
+    'X-From': encodeURIComponent(from || ''),
+  };
+  if (opts.caption) headers['X-Caption'] = encodeURIComponent(opts.caption);
+  await axios.post(PRINTER_IMAGE_URL, imageBuffer, { headers });
+}
+
+module.exports = { printMessage, printImage };

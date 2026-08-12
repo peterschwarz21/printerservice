@@ -357,6 +357,22 @@ Text any message to your Twilio number from an allowed phone number. It gets
 wrapped in an ASCII border with a timestamp and printed. You get a confirmation
 text back; numbers not on the allowlist are rejected.
 
+### Photos
+
+Text a **picture** (MMS) and it prints as an image. Any text you send with the
+photo prints as a centered caption underneath, followed by a `from <number>`
+line. Multiple photos in one message all print (the caption attaches to the
+first). You get a `✅ Printed your photo!` reply.
+
+Photos are scaled to the printer's width (`PRINTER_IMAGE_WIDTH`, default `576`
+dots for an 80mm printer; use `384` for 58mm) and converted to grayscale for the
+thermal head. Downloading the image from Twilio requires `TWILIO_ACCOUNT_SID` in
+addition to `TWILIO_AUTH_TOKEN` — make sure both are set. Non-image attachments
+(e.g. video) are skipped with a note in the reply.
+
+> **Note:** MMS requires an MMS-capable Twilio number (US/Canada long codes and
+> toll-free numbers support it; many international numbers don't).
+
 ### Reminders
 
 Start a text with **"remind me"** and include a time to schedule it instead of
@@ -433,6 +449,21 @@ printerservice/
        -d '{"content":"hello\n\n"}'
   ```
 
+- **Photos don't print** — first test the print server directly (no Twilio
+  needed); it should print the image and cut:
+
+  ```bash
+  curl -X POST --data-binary @photo.jpg -H 'Content-Type: image/jpeg' \
+       -H 'X-Caption: hello' -H 'X-From: +15559876543' \
+       localhost:5000/print-image
+  ```
+
+  If that works but texting a photo doesn't, check `TWILIO_ACCOUNT_SID` is set
+  (media downloads use it as the auth username) and that your Twilio number
+  supports MMS. `bad image` errors mean the attachment wasn't a decodable image.
+- **`ModuleNotFoundError: No module named 'PIL'`** — Pillow is missing from the
+  venv. Reinstall with `.venv/bin/pip install -r printer/requirements.txt` and
+  restart: `sudo systemctl restart print_server`.
 - **SMS not arriving** — `systemctl status ngrok sms-listener`; confirm the
   Twilio webhook URL matches your static domain and ends in `/webhook`.
 - **`fetch failed` from the Node jobs, but `curl` to the print server works** —

@@ -3,3 +3,5 @@ Flask
 # extra and won't work without it (needs apt package libusb-1.0-0 at runtime)
 python-escpos[usb]
 python-dotenv
+# Image handling for /print-image (also a transitive dep of python-escpos)
+Pillow
