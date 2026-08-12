@@ -3,5 +3,9 @@ Flask
 # extra and won't work without it (needs apt package libusb-1.0-0 at runtime)
 python-escpos[usb]
 python-dotenv
-# Image handling for /print-image (also a transitive dep of python-escpos)
+# Image handling for /print-image, and for rendering emoji messages to a bitmap
+# (also a transitive dep of python-escpos). Emoji rendering also needs two apt
+# font packages that pip can't provide — see README step 1:
+#   fonts-dejavu-core  (DejaVuSansMono.ttf — the monospace base font)
+#   fonts-noto-core    (NotoEmoji-Regular.ttf — monochrome emoji glyphs)
 Pillow

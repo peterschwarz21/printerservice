@@ -78,11 +78,18 @@ Node installed via **nvm**. If any of those differ, adjust the paths in the
 
 ```bash
 sudo apt update
-sudo apt install -y git python3-venv libusb-1.0-0 libopenjp2-7
+sudo apt install -y git python3-venv libusb-1.0-0 libopenjp2-7 \
+    fonts-dejavu-core fonts-noto-core
 ```
 
 (`libusb` is for the USB printer; `libopenjp2` is a runtime dep of Pillow,
-which `python-escpos` pulls in.)
+which `python-escpos` pulls in. The two font packages are for emoji: the
+printer's text mode can't encode emoji — they'd print as `?` — so messages
+containing them are rendered to a bitmap using **DejaVu Sans Mono**
+(`fonts-dejavu-core`) plus the monochrome **Noto Emoji** font
+(`fonts-noto-core`, at `/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf`)
+and printed as an image. Without these fonts, emoji messages silently fall back
+to the old `?` behavior — plain-text todos are unaffected.)
 
 **Node 18 via nvm:**
 
