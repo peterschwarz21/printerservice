@@ -8,6 +8,7 @@
     "weather": "node weather.js",
     "calendar": "node calendar.js",
     "poem": "node poem.js",
+    "broncos": "node broncos.js",
     "reminders": "node reminders.js"
   },
   "keywords": [

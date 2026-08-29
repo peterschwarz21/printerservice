@@ -20,8 +20,9 @@ Calendar**, and **poem** receipts on a schedule.
                                                  thermal printer
 
   weather.js   (cron, 7:00am)  ─┐
-  calendar.js  (cron, 7:02am)  ─┼─►  print_server.py  ──►  printer
-  poem.js      (cron, 7:04am)  ─┤
+  calendar.js  (cron, 7:02am)  ─┤
+  poem.js      (cron, 7:04am)  ─┼─►  print_server.py  ──►  printer
+  broncos.js   (cron, 7:06am)  ─┤   only prints on Broncos game days
   reminders.js (cron, 1/min)   ─┘   prints scheduled "remind me" texts when due
 ```
 
@@ -34,8 +35,8 @@ Three long-running services (managed by **systemd**, start on boot):
 | `ngrok` | `ngrok.yml` | Public tunnel (static domain) so Twilio can reach the webhook |
 
 Scheduled jobs (cron) also POST to the print server: `weather.js`, `calendar.js`,
-and `poem.js` (daily), plus `reminders.js` (every minute, prints "remind me" texts
-when their time arrives).
+and `poem.js` (daily), `broncos.js` (daily, but only prints on game days), plus
+`reminders.js` (every minute, prints "remind me" texts when their time arrives).
 
 ---
 
@@ -297,7 +298,25 @@ Test it (prints a preview to stdout before sending):
 node poem.js
 ```
 
-### 9. (Optional) Schedule the daily receipts
+### 9. (Optional) Broncos gameday receipt
+
+`broncos.js` prints a game card — opponent, kickoff, TV, venue, betting line, plus
+both teams' records and division position — but **only on days the Broncos actually
+play**. On every other day it exits silently without printing, so a quiet morning is
+the expected result, not a failure.
+
+It uses ESPN's public NFL API — **no key and no account required** — and needs no
+extra npm packages. Set `BRONCOS_TEAM` in `.env` to follow a different team (any
+ESPN abbreviation: `kc`, `gb`, `sea`, ...).
+
+Test it without waiting for a game day by forcing a date:
+
+```bash
+BRONCOS_DATE=2026-09-20 node broncos.js   # a known game day: prints a preview
+node broncos.js                           # today: silent unless there's a game
+```
+
+### 10. (Optional) Schedule the daily receipts
 
 `crontab -e` (as `admin`), then add. Cron doesn't load `.env` (so `cd` into
 the repo first) and doesn't know about nvm (so source `nvm.sh` to get `node`
@@ -309,6 +328,7 @@ SHELL=/bin/bash
 0 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node weather.js   >> /tmp/weather.log   2>&1
 2 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node calendar.js  >> /tmp/calendar.log  2>&1
 4 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node poem.js      >> /tmp/poem.log      2>&1
+6 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node broncos.js   >> /tmp/broncos.log   2>&1
 * * * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node reminders.js >> /tmp/reminders.log 2>&1
 ```
 
@@ -338,6 +358,32 @@ npm run poem                   # or: node poem.js
 
 Optionally set `POEM_MAX_LINES` in `.env` to change the length cap (no restart
 needed — cron jobs read `.env` fresh on each run).
+
+---
+
+## Adding the Broncos job to an already-running instance
+
+Same deal as the poem — `broncos.js` is a one-shot cron script with no new
+dependencies and no keys to configure:
+
+```bash
+cd /home/admin/printerservice
+git pull                       # pulls broncos.js
+
+# Force a known game day so you get a real receipt to look at, instead of
+# waiting for the next Sunday (the print server must be running)
+BRONCOS_DATE=2026-09-20 npm run broncos
+
+# Then confirm the quiet path: on a non-game day this prints nothing at all
+npm run broncos                # or: node broncos.js
+
+# Schedule it — `crontab -e` and add this line (staggered after the others):
+# 6 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node broncos.js >> /tmp/broncos.log 2>&1
+```
+
+Because it stays silent on non-game days, `/tmp/broncos.log` is the place to check
+if you think it should have printed — it logs `No game today — nothing to print.`
+on every quiet run.
 
 ---
 
@@ -444,6 +490,7 @@ printerservice/
 ├── weather.js             # Daily weather receipt (cron)
 ├── calendar.js            # Daily Google Calendar receipt (cron)
 ├── poem.js                # Daily poem receipt via PoetryDB (cron)
+├── broncos.js             # Broncos gameday receipt via ESPN (cron, game days only)
 ├── reminders.js           # Prints due "remind me" reminders (cron, every minute)
 ├── authorize.js           # One-time Google OAuth setup (run on a laptop)
 ├── ngrok.yml.example      # ngrok static-domain config template
@@ -511,6 +558,10 @@ printerservice/
   `Restart=always` recovers on its own within a few retries.
 - **Test a job manually** — `node weather.js`, `node calendar.js`, or
   `node poem.js` (each prints a preview to stdout before sending).
+- **The Broncos job never prints** — that's the design: it only prints on days
+  the team actually plays. Check `/tmp/broncos.log` for `No game today` to confirm
+  it ran, and force a known game day to prove the printing path works:
+  `BRONCOS_DATE=2026-09-20 node broncos.js`.
 - **Calendar receipt shows `Could not load calendar [X] (HTTP 404)`** — that
   calendar isn't shared with the hub account, the ID in `CALENDAR_IDS` is
   wrong, or the share hasn't propagated yet (give it a few minutes). Re-check
