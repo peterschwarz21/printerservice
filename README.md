@@ -2,7 +2,7 @@
 
 Text a message to your Twilio number and it prints on a thermal receipt printer
 wired to a Raspberry Pi. Includes optional daily **weather**, **Google
-Calendar**, and **poem** receipts on a schedule.
+Calendar**, **poem**, and **NFL gameday** receipts on a schedule.
 
 ## How it works
 
@@ -22,7 +22,7 @@ Calendar**, and **poem** receipts on a schedule.
   weather.js   (cron, 7:00am)  ─┐
   calendar.js  (cron, 7:02am)  ─┤
   poem.js      (cron, 7:04am)  ─┼─►  print_server.py  ──►  printer
-  broncos.js   (cron, 7:06am)  ─┤   only prints on Broncos game days
+  gameday.js   (cron, 7:06am)  ─┤   only prints when a watched team plays
   reminders.js (cron, 1/min)   ─┘   prints scheduled "remind me" texts when due
 ```
 
@@ -35,8 +35,9 @@ Three long-running services (managed by **systemd**, start on boot):
 | `ngrok` | `ngrok.yml` | Public tunnel (static domain) so Twilio can reach the webhook |
 
 Scheduled jobs (cron) also POST to the print server: `weather.js`, `calendar.js`,
-and `poem.js` (daily), `broncos.js` (daily, but only prints on game days), plus
-`reminders.js` (every minute, prints "remind me" texts when their time arrives).
+and `poem.js` (daily), `gameday.js` (daily, but only prints when a watched NFL
+team plays), plus `reminders.js` (every minute, prints "remind me" texts when
+their time arrives).
 
 ---
 
@@ -155,6 +156,7 @@ Edit `.env` — a single file shared by **all** services:
 | `CALENDAR_TIMEZONE` | Optional; the calendar job falls back to `WEATHER_TIMEZONE` |
 | `POEM_MAX_LINES` | Optional; max poem length for the poem job (default `12`) |
 | `POEM_API_BASE` | Optional; PoetryDB base URL (default `https://poetrydb.org`) |
+| `NFL_TEAMS` | Optional; comma-separated ESPN team abbreviations for the gameday job (default `den,buf`) |
 
 > `.env` is read once at process startup. After editing it, restart the
 > services: `sudo systemctl restart print_server sms-listener`.
@@ -298,22 +300,36 @@ Test it (prints a preview to stdout before sending):
 node poem.js
 ```
 
-### 9. (Optional) Broncos gameday receipt
+### 9. (Optional) NFL gameday receipt
 
-`broncos.js` prints a game card — opponent, kickoff, TV, venue, betting line, plus
-both teams' records and division position — but **only on days the Broncos actually
-play**. On every other day it exits silently without printing, so a quiet morning is
-the expected result, not a failure.
+`gameday.js` prints a card per game — opponent, kickoff, TV, venue, betting line,
+plus both teams' records and division position — but **only when one of your teams
+is actually playing**. On every other day it exits silently without printing, so a
+quiet morning is the expected result, not a failure.
+
+It watches every team in `NFL_TEAMS` (default `den,buf` — any ESPN abbreviations:
+`kc`, `gb`, `sea`, ...) and covers this window on each run:
+
+| Run day | Games it prints |
+|---|---|
+| Any day | today's games, plus tomorrow's as a heads-up |
+| Friday | Friday's games, plus **all of Saturday and Sunday** |
+
+So a Sunday game prints three times — Friday's weekend preview, Saturday's
+day-before heads-up, and again on Sunday morning. Each game is headed `TODAY`,
+`TOMORROW`, or the weekday name so you can tell which is which at a glance. When
+more than one game lands in the window they share a single receipt, sorted by
+kickoff, and a game between two watched teams (Bills at Broncos, Christmas 2026)
+prints once rather than twice.
 
 It uses ESPN's public NFL API — **no key and no account required** — and needs no
-extra npm packages. Set `BRONCOS_TEAM` in `.env` to follow a different team (any
-ESPN abbreviation: `kc`, `gb`, `sea`, ...).
+extra npm packages.
 
 Test it without waiting for a game day by forcing a date:
 
 ```bash
-BRONCOS_DATE=2026-09-20 node broncos.js   # a known game day: prints a preview
-node broncos.js                           # today: silent unless there's a game
+NFL_DATE=2026-12-18 node gameday.js   # a Friday: previews Sat + Sun games
+node gameday.js                       # today: silent unless someone plays
 ```
 
 ### 10. (Optional) Schedule the daily receipts
@@ -328,7 +344,7 @@ SHELL=/bin/bash
 0 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node weather.js   >> /tmp/weather.log   2>&1
 2 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node calendar.js  >> /tmp/calendar.log  2>&1
 4 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node poem.js      >> /tmp/poem.log      2>&1
-6 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node broncos.js   >> /tmp/broncos.log   2>&1
+6 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node gameday.js   >> /tmp/gameday.log   2>&1
 * * * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node reminders.js >> /tmp/reminders.log 2>&1
 ```
 
@@ -361,29 +377,38 @@ needed — cron jobs read `.env` fresh on each run).
 
 ---
 
-## Adding the Broncos job to an already-running instance
+## Adding the gameday job to an already-running instance
 
-Same deal as the poem — `broncos.js` is a one-shot cron script with no new
+Same deal as the poem — `gameday.js` is a one-shot cron script with no new
 dependencies and no keys to configure:
 
 ```bash
 cd /home/admin/printerservice
-git pull                       # pulls broncos.js
+git pull                       # pulls gameday.js
 
 # Force a known game day so you get a real receipt to look at, instead of
 # waiting for the next Sunday (the print server must be running)
-BRONCOS_DATE=2026-09-20 npm run broncos
+NFL_DATE=2026-12-18 npm run gameday
 
-# Then confirm the quiet path: on a non-game day this prints nothing at all
-npm run broncos                # or: node broncos.js
+# Then confirm the quiet path: with nobody playing this prints nothing at all
+npm run gameday                # or: node gameday.js
 
 # Schedule it — `crontab -e` and add this line (staggered after the others):
-# 6 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node broncos.js >> /tmp/broncos.log 2>&1
+# 6 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node gameday.js >> /tmp/gameday.log 2>&1
 ```
 
-Because it stays silent on non-game days, `/tmp/broncos.log` is the place to check
-if you think it should have printed — it logs `No game today — nothing to print.`
-on every quiet run.
+Set `NFL_TEAMS` in `.env` to change who it follows (no restart needed — cron jobs
+read `.env` fresh on each run).
+
+> **Upgrading from `broncos.js`?** The script was renamed when it gained multi-team
+> support, so update the old crontab line or it will fail every morning looking for
+> a file that no longer exists. The old `BRONCOS_TEAM` and `BRONCOS_DATE` variables
+> are still read as fallbacks, so an existing `.env` keeps working — but note that
+> `BRONCOS_TEAM` sets the *whole* watch list, so it would follow that one team only.
+
+Because it stays silent when nobody plays, `/tmp/gameday.log` is the place to check
+if you think it should have printed — it logs `No games in the window — nothing to
+print.` on every quiet run.
 
 ---
 
@@ -490,7 +515,7 @@ printerservice/
 ├── weather.js             # Daily weather receipt (cron)
 ├── calendar.js            # Daily Google Calendar receipt (cron)
 ├── poem.js                # Daily poem receipt via PoetryDB (cron)
-├── broncos.js             # Broncos gameday receipt via ESPN (cron, game days only)
+├── gameday.js             # NFL gameday receipts via ESPN (cron, game days only)
 ├── reminders.js           # Prints due "remind me" reminders (cron, every minute)
 ├── authorize.js           # One-time Google OAuth setup (run on a laptop)
 ├── ngrok.yml.example      # ngrok static-domain config template
@@ -558,10 +583,15 @@ printerservice/
   `Restart=always` recovers on its own within a few retries.
 - **Test a job manually** — `node weather.js`, `node calendar.js`, or
   `node poem.js` (each prints a preview to stdout before sending).
-- **The Broncos job never prints** — that's the design: it only prints on days
-  the team actually plays. Check `/tmp/broncos.log` for `No game today` to confirm
-  it ran, and force a known game day to prove the printing path works:
-  `BRONCOS_DATE=2026-09-20 node broncos.js`.
+- **The gameday job never prints** — that's the design: it only prints when a team
+  in `NFL_TEAMS` is playing today or tomorrow (or over the weekend, on Fridays).
+  Check `/tmp/gameday.log` for `No games in the window` to confirm it ran, and force
+  a known game day to prove the printing path works:
+  `NFL_DATE=2026-12-18 node gameday.js`.
+- **The gameday job prints the same game several times** — also by design: a Sunday
+  game is previewed on Friday, again on Saturday as the day-before heads-up, then on
+  Sunday itself. Drop the Friday cron run or narrow the window in `datesToCheck()`
+  if that's more paper than you want.
 - **Calendar receipt shows `Could not load calendar [X] (HTTP 404)`** — that
   calendar isn't shared with the hub account, the ID in `CALENDAR_IDS` is
   wrong, or the share hasn't propagated yet (give it a few minutes). Re-check

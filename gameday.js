@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * broncos.js
- * Checks whether the Broncos play today and, if so, sends a gameday receipt to
- * the thermal print server. Prints nothing on the ~340 days a year with no game.
+ * gameday.js
+ * Prints a receipt for upcoming games for the teams in NFL_TEAMS: any game
+ * today, any game tomorrow, and — when it runs on a Friday — the rest of the
+ * weekend too. Prints nothing at all when no team plays in that window.
  * Uses ESPN's public NFL API (no key/account required).
- * Cron: 6 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node broncos.js
+ * Cron: 6 7 * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node gameday.js
  */
 
 require('dotenv').config();
@@ -14,17 +15,21 @@ require('dotenv').config();
 // ---------------------------------------------------------------------------
 // ESPN's public API — no key, no account. Note the two different path prefixes
 // below (/apis/site/v2/... vs /apis/v2/...); that's ESPN's doing, not a typo.
-const API_BASE      = process.env.NFL_API_BASE  || 'https://site.api.espn.com';
+const API_BASE       = process.env.NFL_API_BASE || 'https://site.api.espn.com';
 const SCOREBOARD_URL = `${API_BASE}/apis/site/v2/sports/football/nfl/scoreboard`;
 const STANDINGS_URL  = `${API_BASE}/apis/v2/sports/football/nfl/standings`;
-// ESPN team abbreviation to watch for.
-const TEAM          = (process.env.BRONCOS_TEAM || 'den').toLowerCase();
+// Comma-separated ESPN team abbreviations to watch. BRONCOS_TEAM is the older
+// single-team name, still honored so an existing .env keeps working.
+const TEAMS         = (process.env.NFL_TEAMS || process.env.BRONCOS_TEAM || 'den,buf')
+  .split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
 // 127.0.0.1, not localhost — see src/printer.js
-const PRINT_URL     = process.env.PRINTER_URL    || 'http://127.0.0.1:5000/print';
+const PRINT_URL     = process.env.PRINTER_URL      || 'http://127.0.0.1:5000/print';
 const TIMEZONE      = process.env.WEATHER_TIMEZONE || 'America/Denver';
 // Pretend it's this date (YYYY-MM-DD) instead of today. Testing only.
-const DATE_OVERRIDE = process.env.BRONCOS_DATE   || '';
+const DATE_OVERRIDE = process.env.NFL_DATE || process.env.BRONCOS_DATE || '';
 const WIDTH         = 48;
+
+const FRIDAY = 5;
 
 // ---------------------------------------------------------------------------
 // HELPERS
@@ -66,14 +71,26 @@ function localDate(date) {
   }).format(date);
 }
 
-function formatDate(date) {
-  return date.toLocaleDateString('en-US', {
-    weekday:  'short',
-    month:    'short',
-    day:      'numeric',
-    year:     'numeric',
-    timeZone: TIMEZONE,
-  });
+// Calendar-date arithmetic. These treat a YYYY-MM-DD string as a bare date and
+// anchor it at UTC midnight, so adding a day can't be knocked sideways by a DST
+// transition the way local-midnight arithmetic can.
+function parseDay(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
+function addDays(dateStr, n) {
+  const d = parseDay(dateStr);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function weekdayIndex(dateStr) {
+  return parseDay(dateStr).getUTCDay();
+}
+
+function formatDay(dateStr, opts) {
+  return parseDay(dateStr).toLocaleDateString('en-US', { timeZone: 'UTC', ...opts });
 }
 
 function formatKickoff(date) {
@@ -92,70 +109,85 @@ function ordinal(n) {
   return `${n}${suffix}`;
 }
 
-// Today's date in the local timezone, honoring the BRONCOS_DATE test override.
+// Today's date in the local timezone, honoring the NFL_DATE test override.
 function today() {
   if (DATE_OVERRIDE) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(DATE_OVERRIDE)) {
-      throw new Error(`BRONCOS_DATE must be YYYY-MM-DD, got "${DATE_OVERRIDE}"`);
+      throw new Error(`NFL_DATE must be YYYY-MM-DD, got "${DATE_OVERRIDE}"`);
     }
     return DATE_OVERRIDE;
   }
   return localDate(new Date());
 }
 
+// Today and tomorrow, plus the rest of the weekend when today is a Friday, so
+// Friday's receipt covers Saturday and Sunday in one go.
+function datesToCheck(todayStr) {
+  const dates = [todayStr, addDays(todayStr, 1)];
+  if (weekdayIndex(todayStr) === FRIDAY) dates.push(addDays(todayStr, 2));
+  return [...new Set(dates)];
+}
+
+// "TODAY" / "TOMORROW" / "SUNDAY" — how a game's day is labeled on the receipt.
+function dayLabel(dateStr, todayStr) {
+  if (dateStr === todayStr) return 'TODAY';
+  if (dateStr === addDays(todayStr, 1)) return 'TOMORROW';
+  return formatDay(dateStr, { weekday: 'long' }).toUpperCase();
+}
+
 // ---------------------------------------------------------------------------
-// FIND TODAY'S GAME
+// FIND GAMES
 // ---------------------------------------------------------------------------
 // ESPN's ?dates= parameter buckets games by EASTERN day, not UTC — the Week 1
 // Monday-nighter at 2026-09-15T00:15Z lives under dates=20260914. So we ask for
 // our own local date and then re-check each event's kickoff in our timezone
 // rather than trusting ESPN's bucketing to agree with ours.
-async function findTodaysGame(dateStr) {
+async function findGames(dateStr) {
   const url = `${SCOREBOARD_URL}?dates=${dateStr.replace(/-/g, '')}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`ESPN scoreboard error: ${res.status}`);
 
   const data = await res.json();
+  const games = [];
+
   for (const event of data.events || []) {
     const comp = (event.competitions || [])[0];
     if (!comp) continue;
 
     const competitors = comp.competitors || [];
-    const us = competitors.find(
-      (c) => (c.team?.abbreviation || '').toLowerCase() === TEAM
+    const ours = competitors.filter(
+      (c) => TEAMS.includes((c.team?.abbreviation || '').toLowerCase())
     );
-    if (!us) continue;
+    if (ours.length === 0) continue;
 
     const kickoff = new Date(event.date);
     if (localDate(kickoff) !== dateStr) continue;
 
-    const them = describeTeam(competitors.find((c) => c !== us));
-    const ours = describeTeam(us);
-    return {
+    games.push({
+      id:      event.id,
+      day:     dateStr,
       kickoff,
-      us:      ours,
-      them,
-      home:    ours.homeAway === 'home' ? ours : them,
-      away:    ours.homeAway === 'home' ? them : ours,
+      home:    describeTeam(competitors.find((c) => c.homeAway === 'home')),
+      away:    describeTeam(competitors.find((c) => c.homeAway === 'away')),
       venue:   comp.venue || null,
       network: (comp.broadcasts || []).flatMap((b) => b.names || []).join(', '),
       line:    (comp.odds || [])[0]?.details || '',
       week:    event.week?.number,
       // season.type: 1 = preseason, 2 = regular, 3 = postseason
       season:  event.season?.type,
-    };
+    });
   }
-  return null;
+  return games;
 }
 
 function describeTeam(competitor) {
   if (!competitor) return null;
   const total = (competitor.records || []).find((r) => r.type === 'total');
   return {
-    abbr:    competitor.team?.abbreviation || '',
-    name:    competitor.team?.displayName  || 'Unknown',
+    abbr:     competitor.team?.abbreviation || '',
+    name:     competitor.team?.displayName  || 'Unknown',
     homeAway: competitor.homeAway,
-    record:  total?.summary || '',
+    record:   total?.summary || '',
   };
 }
 
@@ -184,7 +216,7 @@ function statOf(entry, name) {
   return (entry.stats || []).find((s) => s.name === name);
 }
 
-// -> { division: 'AFC West', rank: 4 } for the given team, or null if not found.
+// -> { division: 'AFC West', rank: 4, record: '1-1' }, or null if not found.
 function placeInDivision(divisions, abbr) {
   const target = (abbr || '').toLowerCase();
   for (const division of divisions) {
@@ -211,17 +243,17 @@ function placeInDivision(divisions, abbr) {
 // ---------------------------------------------------------------------------
 // FORMAT RECEIPT
 // ---------------------------------------------------------------------------
-function formatReceipt(game, divisions) {
-  const DIVIDER = '='.repeat(WIDTH);
-  const THIN    = '-'.repeat(WIDTH);
+const DIVIDER = '='.repeat(WIDTH);
+const THIN    = '-'.repeat(WIDTH);
 
-  const lines = [
-    DIVIDER,
-    center('BRONCOS GAMEDAY'),
-    center(formatDate(game.kickoff)),
-    DIVIDER,
-    '',
-  ];
+function formatGame(game, divisions, todayStr) {
+  const lines = [];
+  const label = (text) => '  ' + text.padEnd(10);
+
+  lines.push(THIN);
+  lines.push(`  ${dayLabel(game.day, todayStr)} - ${formatDay(game.day, { weekday: 'short', month: 'short', day: 'numeric' })}`);
+  lines.push(THIN);
+  lines.push('');
 
   // Matchup, away over home, stacked so long names can't overflow 48 columns.
   for (const line of wrap(game.away.name, WIDTH - 2)) lines.push(center(line));
@@ -231,7 +263,6 @@ function formatReceipt(game, divisions) {
 
   // Detail rows. Anything the API didn't give us is omitted rather than printed
   // as "unknown" — odds in particular are often missing early in the week.
-  const label = (text) => '  ' + text.padEnd(10);
   lines.push(label('Kickoff') + formatKickoff(game.kickoff));
   if (game.network) lines.push(label('TV') + game.network);
 
@@ -250,11 +281,10 @@ function formatReceipt(game, divisions) {
     lines.push(label('Week') + prefix + game.week);
   }
 
-  // Records block. Skipped entirely if standings couldn't be loaded AND neither
-  // team has a record to show.
+  // Records block, in the same away-then-home order as the matchup above.
   // Prefer the standings record: the scoreboard reports 0-0 placeholders for a
   // game that hasn't kicked off yet, which is exactly when this job runs.
-  const rows = [game.us, game.them].filter(Boolean).map((team) => {
+  const rows = [game.away, game.home].filter(Boolean).map((team) => {
     const place = divisions ? placeInDivision(divisions, team.abbr) : null;
     const bits = [];
     const record = place?.record || team.record;
@@ -265,8 +295,6 @@ function formatReceipt(game, divisions) {
 
   if (rows.some((r) => r.detail)) {
     lines.push('');
-    lines.push(THIN);
-    lines.push('  RECORDS');
     for (const row of rows) {
       for (const line of wrap(row.name, WIDTH - 2)) lines.push('  ' + line);
       if (row.detail) lines.push('    ' + row.detail);
@@ -274,6 +302,22 @@ function formatReceipt(game, divisions) {
   }
 
   lines.push('');
+  return lines;
+}
+
+function formatReceipt(games, divisions, todayStr) {
+  const lines = [
+    DIVIDER,
+    center('GAMEDAY'),
+    center(formatDay(todayStr, {
+      weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+    })),
+    DIVIDER,
+    '',
+  ];
+
+  for (const game of games) lines.push(...formatGame(game, divisions, todayStr));
+
   lines.push(DIVIDER);
   lines.push('');
   lines.push(''); // extra feed so paper clears the tear bar
@@ -297,20 +341,34 @@ async function sendToPrinter(content) {
 // MAIN
 // ---------------------------------------------------------------------------
 async function main() {
-  const dateStr = today();
-  console.log(`Checking for a game on ${dateStr}...`);
-  const game = await findTodaysGame(dateStr);
+  if (TEAMS.length === 0) throw new Error('NFL_TEAMS is empty — set it in .env');
 
-  // Nothing to say: no game today, so skip the receipt entirely rather than
-  // printing "no game" every morning and wasting paper.
-  if (!game) {
-    console.log('No game today — nothing to print.');
+  const todayStr = today();
+  const dates    = datesToCheck(todayStr);
+  console.log(`Checking ${TEAMS.join(', ').toUpperCase()} on ${dates.join(', ')}...`);
+
+  // One scoreboard request per day in the window; a day with no game is cheap.
+  const found = await Promise.all(dates.map((d) => findGames(d)));
+
+  // Both watched teams can appear in the same game (DEN vs BUF), which would
+  // otherwise add that game to the receipt twice.
+  const seen  = new Set();
+  const games = found.flat()
+    .filter((g) => !seen.has(g.id) && seen.add(g.id))
+    .sort((a, b) => a.kickoff - b.kickoff);
+
+  // Nothing to say: skip the receipt entirely rather than printing "no games"
+  // every morning and wasting paper.
+  if (games.length === 0) {
+    console.log('No games in the window — nothing to print.');
     return;
   }
-  console.log(`Found: ${game.away.name} at ${game.home.name}`);
+  for (const g of games) {
+    console.log(`Found: ${g.away.name} at ${g.home.name} (${g.day})`);
+  }
 
   // A standings hiccup shouldn't cost us the whole receipt — print the game
-  // card without the division line instead.
+  // cards without the division lines instead.
   let divisions = null;
   try {
     console.log('Fetching standings...');
@@ -320,7 +378,7 @@ async function main() {
   }
 
   console.log('Formatting receipt...');
-  const receipt = formatReceipt(game, divisions);
+  const receipt = formatReceipt(games, divisions, todayStr);
 
   console.log('--- PREVIEW ---');
   console.log(receipt);
