@@ -6,6 +6,7 @@ const { isAllowed } = require('./allowlist');
 const { printMessage, printImage } = require('./printer');
 const { parseReminder, TIMEZONE } = require('./reminder-parser');
 const { addReminder } = require('./reminders-store');
+const { notifyAdmins } = require('./notify');
 
 const app = express();
 app.set('trust proxy', true);
@@ -94,6 +95,7 @@ app.post('/webhook', (req, res) => {
       })
       .catch((err) => {
         console.error('Image print error:', err.message);
+        notifyAdmins('printer:print-failed', `Printer error on an incoming photo: ${err.message}`);
         twimlReply(res, '❌ Printer error — photo not printed. Try again!');
       });
     return;
@@ -124,6 +126,9 @@ app.post('/webhook', (req, res) => {
     })
     .catch((err) => {
       console.error('Printer error:', err.message);
+      // Not awaited: the TwiML reply has to beat Twilio's ~15s webhook window,
+      // and notifyAdmins swallows its own failures.
+      notifyAdmins('printer:print-failed', `Printer error on an incoming text: ${err.message}`);
       twimlReply(res, '❌ Printer error — message not printed. Try again!');
     });
 });

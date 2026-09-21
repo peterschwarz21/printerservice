@@ -9,6 +9,8 @@
 
 require('dotenv').config();
 
+const { notifyAdmins } = require('./src/notify');
+
 const fs = require('fs');
 const path = require('path');
 
@@ -294,6 +296,10 @@ async function sendToPrinter(content) {
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ content }),
   });
+  // A printer exception comes back as a 500 from print_server.py; treat that as
+  // a failed job so the catch below can alert, rather than logging "HTTP 500"
+  // and exiting 0.
+  if (!res.ok) throw new Error(`Print server error: ${res.status}`);
   return res.status;
 }
 
@@ -347,8 +353,10 @@ async function main() {
   console.log(`Print server responded with HTTP ${status}`);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   // fetch() wraps the real network error (e.g. ECONNREFUSED) in err.cause
   console.error('Error:', err.message, err.cause ? `(${err.cause})` : '');
+  // await, not fire-and-forget: process.exit kills the in-flight request.
+  await notifyAdmins('cron:calendar', `Calendar receipt failed: ${err.message}`);
   process.exit(1);
 });

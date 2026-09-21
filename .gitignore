@@ -2,6 +2,7 @@ node_modules/
 .env
 google-token.json
 reminders.json
+notify-state.json
 .venv/
 ngrok.yml
 *.log

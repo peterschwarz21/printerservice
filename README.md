@@ -145,6 +145,9 @@ Edit `.env` — a single file shared by **all** services:
 | `TWILIO_AUTH_TOKEN` | From your [Twilio Console](https://console.twilio.com); used to validate webhooks |
 | `TWILIO_PHONE_NUMBER` | Your Twilio number in E.164 (informational) |
 | `ALLOWED_NUMBERS` | Comma-separated E.164 numbers allowed to print |
+| `TWILIO_MESSAGING_SERVICE_SID` | Messaging Service the A2P 10DLC campaign is attached to; required to send outbound |
+| `ADMIN_NUMBERS` | Comma-separated E.164 numbers paged when a job fails (see [failure alerts](#adding-failure-alerts-to-an-already-running-instance)); empty disables alerting |
+| `NOTIFY_COOLDOWN_MINUTES` | Optional; quiet period per failure type (default `360`) |
 | `PORT` | Local port for the webhook server (default `3000`) |
 | `PRINTER_URL` | Print server endpoint (default `http://127.0.0.1:5000/print` — keep the IP, not `localhost`; see Troubleshooting) |
 | `PRINTER_VENDOR_ID` / `PRINTER_PRODUCT_ID` | USB IDs from `lsusb` (hex, `0x…`) |
@@ -436,6 +439,52 @@ their time has passed, independent of the webhook server.
 
 ---
 
+## Adding failure alerts to an already-running instance
+
+By default a failed job is only visible in `/tmp/*.log` — if the 7am receipts stop,
+you find out by noticing no paper. Setting `ADMIN_NUMBERS` turns those failures
+into a text. Requires an A2P-registered Messaging Service to send outbound.
+
+```bash
+cd /home/admin/printerservice
+git pull
+
+# Add to .env:
+#   TWILIO_MESSAGING_SERVICE_SID=MG...   # the A2P campaign attaches to this
+#   ADMIN_NUMBERS=+15551234567           # who gets paged; separate from ALLOWED_NUMBERS
+#   NOTIFY_COOLDOWN_MINUTES=360          # optional, default 6h
+
+# Restart the webhook so it can alert on print failures too
+sudo systemctl restart sms-listener
+
+# Send a one-off test message to confirm the campaign carries traffic
+node send.js +15551234567 "test"
+```
+
+What triggers an alert:
+
+| Failure | Who hears about it |
+|---|---|
+| A daily receipt job fails (weather, calendar, poem, gameday) | `ADMIN_NUMBERS` |
+| A texted message or photo fails to print | `ADMIN_NUMBERS`, plus the sender via the usual reply |
+| A reminder can't print | The person who set it, who gets the reminder **as a text** |
+
+`ADMIN_NUMBERS` is deliberately separate from `ALLOWED_NUMBERS`: the allowlist is
+everyone who may print, and they don't need a page about a paper jam. Leave
+`ADMIN_NUMBERS` empty to disable alerting — the jobs behave exactly as before.
+
+Alerts are rate-limited per failure type (`NOTIFY_COOLDOWN_MINUTES`, default 6h),
+so one printer outage doesn't send four texts as the morning jobs fail in turn. A
+*different* failure still alerts immediately. The cooldown clock only starts once
+a text actually goes out, so a Twilio outage can't silence the next six hours.
+State lives in `notify-state.json` (created automatically, gitignored).
+
+A reminder that fails to print is texted to whoever set it and then dropped from
+the queue — but only once the text is away. If the SMS fails too it stays queued
+for the next sweep, so a Twilio hiccup can't be what destroys a reminder.
+
+---
+
 ## Usage
 
 Text any message to your Twilio number from an allowed phone number. It gets
@@ -503,7 +552,8 @@ printerservice/
 │   ├── printer.js         # Message formatter + POST to print server
 │   ├── reminder-parser.js # Parses "remind me ..." texts (chrono-node)
 │   ├── reminders-store.js # JSON persistence for pending reminders
-│   └── allowlist.js       # Phone number allowlist
+│   ├── notify.js          # Outbound SMS + rate-limited failure alerts
+│   └── allowlist.js       # Phone number lists (allowlist + admins)
 ├── printer/
 │   ├── print_server.py    # Flask ESC/POS print server (USB)
 │   └── requirements.txt   # Python deps
@@ -517,6 +567,7 @@ printerservice/
 ├── poem.js                # Daily poem receipt via PoetryDB (cron)
 ├── gameday.js             # NFL gameday receipts via ESPN (cron, game days only)
 ├── reminders.js           # Prints due "remind me" reminders (cron, every minute)
+├── send.js                # CLI: send a one-off SMS (A2P campaign smoke test)
 ├── authorize.js           # One-time Google OAuth setup (run on a laptop)
 ├── ngrok.yml.example      # ngrok static-domain config template
 ├── .env.example           # Shared config template

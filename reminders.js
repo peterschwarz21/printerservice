@@ -11,6 +11,7 @@ require('dotenv').config();
 
 const { readAll, writeAll } = require('./src/reminders-store');
 const { printMessage } = require('./src/printer');
+const { sendSms } = require('./src/notify');
 
 async function main() {
   const all = readAll();
@@ -27,14 +28,27 @@ async function main() {
   if (due.length === 0) return;
   console.log(`${new Date().toISOString()} — ${due.length} reminder(s) due`);
 
-  // Print each due reminder. Keep any that fail so the next run retries them.
+  // Print each due reminder. If the printer is down the reminder is already
+  // late, so fall back to texting it — the content is the point, the paper
+  // isn't. Anything we can neither print nor text stays queued for the next run.
   const failed = [];
   for (const r of due) {
     try {
       await printMessage(r.body, r.from, { header: 'REMINDER' });
       console.log(`Printed reminder ${r.id}: "${r.body}"`);
+      continue;
     } catch (err) {
-      console.error(`Failed to print reminder ${r.id}: ${err.message} — will retry`);
+      console.error(`Failed to print reminder ${r.id}: ${err.message} — trying SMS`);
+    }
+
+    try {
+      // Label it, so an unexpected text reads as the reminder it is.
+      const sid = await sendSms(r.from, `⏰ Reminder (printer offline): ${r.body}`);
+      console.log(`Texted reminder ${r.id} to ${r.from} (${sid})`);
+    } catch (err) {
+      // Drop it only once it has actually reached them; a Twilio hiccup must
+      // not be what destroys the reminder.
+      console.error(`Failed to text reminder ${r.id}: ${err.message} — will retry`);
       failed.push(r);
     }
   }
