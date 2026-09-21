@@ -9,7 +9,8 @@
     "calendar": "node calendar.js",
     "poem": "node poem.js",
     "gameday": "node gameday.js",
-    "reminders": "node reminders.js"
+    "reminders": "node reminders.js",
+    "send": "node send.js"
   },
   "keywords": [
     "thermal-printer",
