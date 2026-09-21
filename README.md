@@ -522,7 +522,17 @@ reply, just a line in the log (see [Opt-out and unknown senders](#opt-out-and-un
 Text a **picture** (MMS) and it prints as an image. Any text you send with the
 photo prints as a centered caption underneath, followed by a `from <number>`
 line. Multiple photos in one message all print (the caption attaches to the
-first). You get a `✅ Printed your photo!` reply.
+first).
+
+You get an immediate `📷 Got it — working on that now…` reply, and then nothing
+more if it works — the photo coming out of the printer is the confirmation. Only
+a problem earns a second message: a printer failure, or an attachment that
+wasn't an image.
+
+The ack goes out before the printing starts on purpose. Downloading from
+Twilio's CDN and rasterizing a photo on a Pi Zero can take longer than Twilio's
+~15s webhook window, and a reply written after that window is discarded — which
+used to mean a failed photo print ended in silence rather than an error.
 
 Photos are scaled to the printer's width (`PRINTER_IMAGE_WIDTH`, default `576`
 dots for an 80mm printer; use `384` for 58mm) and converted to grayscale for the

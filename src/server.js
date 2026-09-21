@@ -6,7 +6,7 @@ const { isAllowed } = require('./allowlist');
 const { printMessage, printImage } = require('./printer');
 const { parseReminder, TIMEZONE } = require('./reminder-parser');
 const { addReminder } = require('./reminders-store');
-const { notifyAdmins } = require('./notify');
+const { notifyAdmins, sendSms, isPermanentFailure } = require('./notify');
 
 const app = express();
 app.set('trust proxy', true);
@@ -20,6 +20,19 @@ function twimlReply(res, message) {
   const twiml = new twilio.twiml.MessagingResponse();
   twiml.message(message);
   res.type('text/xml').send(twiml.toString());
+}
+
+// Tell the sender about an outcome that landed after we already replied. This
+// is a real outbound message rather than TwiML, so it costs a send — reserve it
+// for things the sender can't see for themselves.
+function followUp(to, message) {
+  sendSms(to, message).catch((err) => {
+    if (isPermanentFailure(err)) {
+      console.error(`Could not follow up with ${to} (${err.message}) — they have opted out`);
+    } else {
+      console.error(`Could not follow up with ${to}: ${err.message}`);
+    }
+  });
 }
 
 // A valid TwiML document with no message in it: Twilio sees a clean 200 and
@@ -95,19 +108,28 @@ app.post('/webhook', (req, res) => {
   const numMedia = parseInt(req.body.NumMedia || '0', 10);
   if (numMedia > 0) {
     console.log(`Printing ${numMedia} media item(s) from ${from}`);
+    // Ack now, print after. Downloading from Twilio's CDN and rasterizing on a
+    // Pi Zero can outlast Twilio's ~15s webhook window, and a TwiML reply
+    // written after that window is simply discarded — which is how a failed
+    // photo print used to end in silence. Only bad news gets a follow-up; a
+    // photo that prints announces itself on paper.
+    twimlReply(res, '📷 Got it — working on that now…');
+
     handleMedia(numMedia, req.body, from, body)
       .then(({ printed, hadNonImage }) => {
         if (printed === 0) {
-          return twimlReply(res, '⚠️ Only images can be printed — that attachment isn’t supported.');
+          return followUp(from, '⚠️ Only images can be printed — that attachment isn’t supported.');
         }
         const noun = printed === 1 ? 'photo' : `${printed} photos`;
-        const extra = hadNonImage ? ' (skipped non-image attachments)' : '';
-        twimlReply(res, `✅ Printed your ${noun}!${extra}`);
+        console.log(`Printed ${noun} from ${from}`);
+        if (hadNonImage) {
+          return followUp(from, `✅ Printed your ${noun} — skipped the non-image attachments.`);
+        }
       })
       .catch((err) => {
         console.error('Image print error:', err.message);
         notifyAdmins('printer:print-failed', `Printer error on an incoming photo: ${err.message}`);
-        twimlReply(res, '❌ Printer error — photo not printed. Try again!');
+        followUp(from, '❌ Printer error — photo not printed. Try again!');
       });
     return;
   }
