@@ -23,7 +23,8 @@ Calendar**, **poem**, and **NFL gameday** receipts on a schedule.
   calendar.js  (cron, 7:02am)  ─┤
   poem.js      (cron, 7:04am)  ─┼─►  print_server.py  ──►  printer
   gameday.js   (cron, 7:06am)  ─┤   only prints when a watched team plays
-  reminders.js (cron, 1/min)   ─┘   prints scheduled "remind me" texts when due
+  reminders.js (cron, 1/min)   ─┤   prints scheduled "remind me" texts when due
+  weatheralert.js (cron, 1/15m)─┘   texts + prints NWS warnings, once per event
 ```
 
 Three long-running services (managed by **systemd**, start on boot):
@@ -148,6 +149,9 @@ Edit `.env` — a single file shared by **all** services:
 | `TWILIO_MESSAGING_SERVICE_SID` | Messaging Service the A2P 10DLC campaign is attached to; required to send outbound |
 | `ADMIN_NUMBERS` | Comma-separated E.164 numbers paged when a job fails (see [failure alerts](#adding-failure-alerts-to-an-already-running-instance)); empty disables alerting |
 | `NOTIFY_COOLDOWN_MINUTES` | Optional; quiet period per failure type (default `360`) |
+| `NWS_USER_AGENT` | Contact string for api.weather.gov (it returns 403 without one) |
+| `NWS_SEVERITIES` | Optional; alert severities (default `Extreme,Severe`) |
+| `NWS_URGENCIES` | Optional; alert urgencies (default `Immediate,Expected`) |
 | `PORT` | Local port for the webhook server (default `3000`) |
 | `PRINTER_URL` | Print server endpoint (default `http://127.0.0.1:5000/print` — keep the IP, not `localhost`; see Troubleshooting) |
 | `PRINTER_VENDOR_ID` / `PRINTER_PRODUCT_ID` | USB IDs from `lsusb` (hex, `0x…`) |
@@ -510,6 +514,77 @@ retried normally — only the permanent codes are given up on.
 
 ---
 
+## Adding commands and weather alerts to an already-running instance
+
+Both need `ADMIN_NUMBERS` set (see the failure-alerts section above). Commands
+also need the print server restarted, since `/status` calls a new `/health`
+route added to `printer/print_server.py`.
+
+```bash
+cd /home/admin/printerservice
+git pull
+
+# /status probes the printer through a new route in the Flask app
+sudo systemctl restart print_server sms-listener
+
+# Dry-run the weather job — prints nothing at all when nothing is active
+node weatheralert.js
+
+# Schedule it — `crontab -e`, every 15 minutes:
+# 0,15,30,45 * * * * cd /home/admin/printerservice && . "$HOME/.nvm/nvm.sh" && node weatheralert.js >> /tmp/weatheralert.log 2>&1
+```
+
+### Commands
+
+Text these from a number in `ADMIN_NUMBERS`:
+
+| Command | What you get |
+|---|---|
+| `/status` | Whether the printer is reachable, when it last printed, how many reminders are pending |
+| `/list` | Pending reminders, soonest first, each with a short id |
+| `/cancel <id>` | Cancels that reminder (ids come from `/list`) |
+| `/help` | The list of commands |
+
+Replies are TwiML, so they ride the inbound webhook and cost nothing extra.
+
+Commands are **admin-only**, and the gate is silent: for anyone else on
+`ALLOWED_NUMBERS`, `/status` is just text and gets printed like anything else.
+That keeps the commands from being advertised to the rest of the household, and
+means nothing becomes unprintable — only messages starting with `/` from an
+admin are ever intercepted, so you can still print the word "status".
+
+`/list` ids are the random half of each reminder's internal id rather than a
+position in the list, so an id stays valid even if another reminder fires
+between `/list` and `/cancel`.
+
+### Severe weather alerts
+
+`weatheralert.js` polls [api.weather.gov](https://api.weather.gov) for active
+warnings covering `WEATHER_LAT`/`WEATHER_LON`, texts `ADMIN_NUMBERS` and prints a
+receipt. Free, no key, US only. It prints nothing when nothing is active, so
+most runs are silent.
+
+It alerts **once per event**, keyed on the event name (`"Flood Warning"`) in
+`weather-alerts.json` — not on the alert id. NWS reissues an ongoing warning
+under a fresh id every few minutes, so an id-keyed store would re-text you on
+every poll for the whole storm. Once an event clears it's dropped from the file,
+so the next one of that kind alerts normally.
+
+Two filters keep the volume sane, both tunable in `.env`:
+
+- `NWS_SEVERITIES` (default `Extreme,Severe`) — `Moderate` sweeps in routine
+  advisories like dense fog.
+- `NWS_URGENCIES` (default `Immediate,Expected`) — Watches come through as
+  `Severe` with urgency `Future`, so without this a routine Flood Watch pages you
+  exactly like a tornado warning.
+
+An event is only marked as seen after the text goes out, so if a send fails the
+next run tries again rather than silently swallowing the warning.
+
+---
+
+---
+
 ## Usage
 
 Text any message to your Twilio number from an allowed phone number. It gets
@@ -577,6 +652,9 @@ Buy oat milk and sourdough bread from the store
 ================================================
 ```
 
+If you're an admin, `/list` shows what's pending and `/cancel <id>` drops one —
+see [Commands](#commands).
+
 ---
 
 ## Project structure
@@ -602,6 +680,7 @@ printerservice/
 ├── calendar.js            # Daily Google Calendar receipt (cron)
 ├── poem.js                # Daily poem receipt via PoetryDB (cron)
 ├── gameday.js             # NFL gameday receipts via ESPN (cron, game days only)
+├── weatheralert.js        # Severe NWS weather alerts (cron, 1/15min, only when active)
 ├── reminders.js           # Prints due "remind me" reminders (cron, every minute)
 ├── authorize.js           # One-time Google OAuth setup (run on a laptop)
 ├── ngrok.yml.example      # ngrok static-domain config template

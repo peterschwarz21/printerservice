@@ -2,10 +2,10 @@ require('dotenv').config();
 const axios = require('axios');
 const express = require('express');
 const twilio = require('twilio');
-const { isAllowed } = require('./allowlist');
+const { isAllowed, isAdmin } = require('./allowlist');
 const { printMessage, printImage } = require('./printer');
 const { parseReminder, TIMEZONE } = require('./reminder-parser');
-const { addReminder } = require('./reminders-store');
+const { addReminder, readAll, removeReminder, handleOf } = require('./reminders-store');
 const { notifyAdmins, sendSms, isPermanentFailure } = require('./notify');
 
 const app = express();
@@ -77,6 +77,74 @@ async function handleMedia(numMedia, body, from, caption) {
   return { printed, hadNonImage: images.length < numMedia };
 }
 
+// Ask the print server whether it can actually open the printer. Derived from
+// PRINTER_URL so it follows the same host/port as every other call.
+const PRINTER_HEALTH_URL = (process.env.PRINTER_URL || 'http://127.0.0.1:5000/print')
+  .replace(/\/print$/, '/health');
+
+async function printerHealth() {
+  try {
+    const resp = await axios.get(PRINTER_HEALTH_URL, { timeout: 4000 });
+    return resp.data;
+  } catch (err) {
+    // Flask itself is down or unreachable — distinct from "up, printer broken".
+    return { ok: false, error: err.message, unreachable: true };
+  }
+}
+
+function formatWhen(iso) {
+  return new Date(iso).toLocaleString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true, timeZone: TIMEZONE,
+  });
+}
+
+const HELP = 'Commands: /status, /list, /cancel <id>, /help';
+
+// Admin-only, checked by the caller. Returns true if the message was a command
+// and a reply has been sent; false to let it fall through and print normally.
+async function handleCommand(body, res) {
+  const [word, ...rest] = body.split(/\s+/);
+  const arg = rest.join(' ').trim();
+
+  switch (word.toLowerCase()) {
+    case '/status': {
+      const health = await printerHealth();
+      const pending = readAll();
+      const printer = health.ok
+        ? '🖨️ Printer: online'
+        : `🖨️ Printer: OFFLINE (${health.unreachable ? 'print server unreachable' : health.error})`;
+      const last = health.last_print_at
+        ? `🕐 Last print: ${formatWhen(health.last_print_at)}`
+        : '🕐 Last print: none since restart';
+      const noun = pending.length === 1 ? 'reminder' : 'reminders';
+      twimlReply(res, `${printer}\n${last}\n⏰ ${pending.length} ${noun} pending`);
+      return true;
+    }
+
+    case '/list': {
+      const pending = readAll().sort((a, b) => new Date(a.fireAt) - new Date(b.fireAt));
+      if (pending.length === 0) return twimlReply(res, '⏰ No reminders pending.'), true;
+      const lines = pending.map((r) => `[${handleOf(r.id)}] ${formatWhen(r.fireAt)} — ${r.body}`);
+      twimlReply(res, lines.join('\n'));
+      return true;
+    }
+
+    case '/cancel': {
+      if (!arg) return twimlReply(res, 'Usage: /cancel <id> — get ids from /list'), true;
+      const removed = removeReminder(arg);
+      if (!removed) return twimlReply(res, `❓ No reminder with id "${arg}" — check /list`), true;
+      console.log(`Cancelled reminder ${removed.id}: "${removed.body}"`);
+      twimlReply(res, `🗑️ Cancelled: "${removed.body}" (was ${formatWhen(removed.fireAt)})`);
+      return true;
+    }
+
+    default:
+      twimlReply(res, HELP);
+      return true;
+  }
+}
+
 app.post('/webhook', (req, res) => {
   // Validate the request is genuinely from Twilio
   const signature = req.headers['x-twilio-signature'];
@@ -136,6 +204,18 @@ app.post('/webhook', (req, res) => {
 
   if (!body) {
     return twimlReply(res, '⚠️ Empty message received — nothing to print!');
+  }
+
+  // Commands are admin-only and must be checked before parseReminder, or
+  // "/cancel ..." could be read as a reminder. Everyone else falls straight
+  // through, so "/status" from the rest of the household just prints — the
+  // commands aren't advertised to people who can't use them.
+  if (isAdmin(from) && body.startsWith('/')) {
+    handleCommand(body, res).catch((err) => {
+      console.error('Command error:', err.message);
+      twimlReply(res, '❌ Something went wrong running that command.');
+    });
+    return;
   }
 
   // Reminders: "remind me at 7pm to take out the trash" -> schedule, don't print now.

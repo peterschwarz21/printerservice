@@ -3,6 +3,7 @@ import io
 import logging
 import os
 import textwrap
+from datetime import datetime, timezone
 from urllib.parse import unquote
 
 from dotenv import load_dotenv
@@ -252,6 +253,30 @@ def render_text_image(text):
 def get_printer():
         return Usb(VENDOR_ID, PRODUCT_ID)
 
+
+# Every print in the system comes through this process — the SMS webhook, the
+# reminder sweeper and the daily cron jobs all POST here — so this is the only
+# place that can answer "when did anything last print?".
+LAST_PRINT_AT = None
+
+
+def mark_printed():
+        global LAST_PRINT_AT
+        LAST_PRINT_AT = datetime.now(timezone.utc).isoformat()
+
+
+@app.route('/health', methods=['GET'])
+def health():
+        # Actually open the USB device rather than guessing: an unplugged
+        # printer or a permissions problem only shows up on the open.
+        try:
+                p = get_printer()
+                p.close()
+                return jsonify({"ok": True, "last_print_at": LAST_PRINT_AT}), 200
+        except Exception as e:
+                return jsonify({"ok": False, "last_print_at": LAST_PRINT_AT,
+                                "error": str(e)}), 200
+
 @app.route('/print', methods=['POST'])
 def print_message():
         data = request.json
@@ -274,6 +299,7 @@ def print_message():
                         p.text(message + "\n")
                 p.cut()
                 p.close()
+                mark_printed()
                 return jsonify({"status": "success"}), 200
         except Exception as e:
                 return jsonify({"status": "error", "message": str(e)}), 500
@@ -315,6 +341,7 @@ def print_image():
                         p.set(align="left")
                 p.cut()
                 p.close()
+                mark_printed()
                 return jsonify({"status": "success"}), 200
         except Exception as e:
                 return jsonify({"status": "error", "message": str(e)}), 500

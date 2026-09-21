@@ -3,6 +3,7 @@ node_modules/
 google-token.json
 reminders.json
 notify-state.json
+weather-alerts.json
 .venv/
 ngrok.yml
 *.log

@@ -42,4 +42,21 @@ function addReminder({ from, body, fireAt, original }) {
   writeAll(entries);
 }
 
-module.exports = { readAll, writeAll, addReminder, FILE };
+// The id is `<timestamp>-<random>`; the random half alone is short enough to
+// text back and stays stable as reminders fire, which a list index would not.
+function handleOf(id) {
+  return String(id).split('-').pop();
+}
+
+// Remove by handle. Returns the reminder that was removed, or null if no such
+// handle — the caller needs to tell "cancelled" from "never existed".
+function removeReminder(handle) {
+  const wanted = String(handle).trim().toLowerCase();
+  const entries = readAll();
+  const match = entries.find((r) => handleOf(r.id).toLowerCase() === wanted);
+  if (!match) return null;
+  writeAll(entries.filter((r) => r !== match));
+  return match;
+}
+
+module.exports = { readAll, writeAll, addReminder, removeReminder, handleOf, FILE };

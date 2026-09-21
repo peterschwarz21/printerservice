@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const twilio = require('twilio');
 
-const { parseNumbers } = require('./allowlist');
+const { adminNumbers } = require('./allowlist');
 
 const ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
@@ -11,10 +11,6 @@ const AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 // bare number — sends through the number alone may not carry the campaign.
 const MESSAGING_SERVICE_SID = process.env.TWILIO_MESSAGING_SERVICE_SID;
 const FROM_NUMBER = process.env.TWILIO_PHONE_NUMBER;
-
-// Operational alerts only. Deliberately NOT falling back to ALLOWED_NUMBERS:
-// the print allowlist is the household, and they don't need a paper-jam page.
-const adminNumbers = parseNumbers(process.env.ADMIN_NUMBERS);
 
 // One outage fails all four 7am cron jobs within six minutes. Remember when we
 // last paged about each kind of failure and stay quiet for a while after.
@@ -80,6 +76,33 @@ async function sendSms(to, body) {
   return sent.sid;
 }
 
+// Send one message to every admin, with no cooldown and no state. Use this for
+// anything that isn't a failure alert — a severe weather warning shouldn't be
+// suppressed because a cron job happened to fail within the same window.
+// Reports how many landed and how many failed permanently, so the caller can
+// tell "nobody heard" from "nobody can ever hear". Never throws.
+async function messageAdmins(body, label = 'message') {
+  let sent = 0;
+  let permanent = 0;
+  for (const to of adminNumbers) {
+    try {
+      const sid = await sendSms(to, body);
+      console.log(`notify: sent ${to} a ${label} (${sid})`);
+      sent++;
+    } catch (err) {
+      if (isPermanentFailure(err)) {
+        // Almost always an admin who texted STOP. Retrying can't fix it, and
+        // they have to text START to undo it — we can't do it for them.
+        console.error(`notify: ${to} cannot receive messages (${err.message}) — remove it from ADMIN_NUMBERS or have them text START`);
+        permanent++;
+      } else {
+        console.error(`notify: could not reach ${to}: ${err.message}`);
+      }
+    }
+  }
+  return { sent, permanent };
+}
+
 // Page ADMIN_NUMBERS about a failure, at most once per `key` per cooldown
 // window. Never throws: a notifier that crashes the job it was reporting on is
 // worse than silence. Returns true if anything was sent.
@@ -102,24 +125,7 @@ async function notifyAdmins(key, body) {
       return false;
     }
 
-    let sent = 0;
-    let permanent = 0;
-    for (const to of adminNumbers) {
-      try {
-        const sid = await sendSms(to, body);
-        console.log(`notify: alerted ${to} about "${key}" (${sid})`);
-        sent++;
-      } catch (err) {
-        if (isPermanentFailure(err)) {
-          // Almost always an admin who texted STOP. Retrying can't fix it, and
-          // they have to text START to undo it — we can't do it for them.
-          console.error(`notify: ${to} cannot receive alerts (${err.message}) — remove it from ADMIN_NUMBERS or have them text START`);
-          permanent++;
-        } else {
-          console.error(`notify: could not alert ${to}: ${err.message}`);
-        }
-      }
-    }
+    const { sent, permanent } = await messageAdmins(body, key);
 
     // Start the cooldown if someone heard about it, or if every failure was
     // permanent — retrying those just burns an API call per failure. A
@@ -135,4 +141,4 @@ async function notifyAdmins(key, body) {
   }
 }
 
-module.exports = { sendSms, notifyAdmins, isConfigured, isPermanentFailure, STATE_FILE };
+module.exports = { sendSms, messageAdmins, notifyAdmins, isConfigured, isPermanentFailure, STATE_FILE };

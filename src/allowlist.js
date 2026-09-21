@@ -10,9 +10,16 @@ function parseNumbers(value) {
 }
 
 const allowedNumbers = parseNumbers(process.env.ALLOWED_NUMBERS);
+// Operational alerts and texted commands. Deliberately NOT a superset of the
+// allowlist: the household prints, but only admins run the printer.
+const adminNumbers = parseNumbers(process.env.ADMIN_NUMBERS);
 
 function isAllowed(phoneNumber) {
   return allowedNumbers.includes(phoneNumber);
 }
 
-module.exports = { isAllowed, parseNumbers };
+function isAdmin(phoneNumber) {
+  return adminNumbers.includes(phoneNumber);
+}
+
+module.exports = { isAllowed, isAdmin, parseNumbers, adminNumbers };
