@@ -456,10 +456,12 @@ git pull
 
 # Restart the webhook so it can alert on print failures too
 sudo systemctl restart sms-listener
-
-# Send a one-off test message to confirm the campaign carries traffic
-node send.js +15551234567 "test"
 ```
+
+Confirm the campaign is actually carrying traffic in the
+[Twilio SMS logs](https://console.twilio.com/us1/monitor/logs/sms) — a `queued`
+message that never reaches `delivered`, or error 30034, means the registration
+isn't live yet.
 
 What triggers an alert:
 
@@ -567,7 +569,6 @@ printerservice/
 ├── poem.js                # Daily poem receipt via PoetryDB (cron)
 ├── gameday.js             # NFL gameday receipts via ESPN (cron, game days only)
 ├── reminders.js           # Prints due "remind me" reminders (cron, every minute)
-├── send.js                # CLI: send a one-off SMS (A2P campaign smoke test)
 ├── authorize.js           # One-time Google OAuth setup (run on a laptop)
 ├── ngrok.yml.example      # ngrok static-domain config template
 ├── .env.example           # Shared config template
