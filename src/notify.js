@@ -51,6 +51,20 @@ function writeState(state) {
   fs.renameSync(tmp, STATE_FILE);
 }
 
+// Twilio codes that mean "this will never succeed, stop trying": the recipient
+// texted STOP (21610), or the number can't receive SMS at all. Twilio is the
+// source of truth for opt-out — it blocks these at the carrier level — so we
+// discover it here rather than keeping a local list that could drift.
+const PERMANENT_ERROR_CODES = new Set([
+  21610, // unsubscribed recipient (STOP)
+  21211, // invalid 'To' number
+  21614, // 'To' number is not a valid mobile number
+]);
+
+function isPermanentFailure(err) {
+  return Boolean(err && PERMANENT_ERROR_CODES.has(err.code));
+}
+
 // Sends and throws on failure — callers that must know (the reminder fallback)
 // catch it. Returns the message SID.
 async function sendSms(to, body) {
@@ -89,19 +103,28 @@ async function notifyAdmins(key, body) {
     }
 
     let sent = 0;
+    let permanent = 0;
     for (const to of adminNumbers) {
       try {
         const sid = await sendSms(to, body);
         console.log(`notify: alerted ${to} about "${key}" (${sid})`);
         sent++;
       } catch (err) {
-        console.error(`notify: could not alert ${to}: ${err.message}`);
+        if (isPermanentFailure(err)) {
+          // Almost always an admin who texted STOP. Retrying can't fix it, and
+          // they have to text START to undo it — we can't do it for them.
+          console.error(`notify: ${to} cannot receive alerts (${err.message}) — remove it from ADMIN_NUMBERS or have them text START`);
+          permanent++;
+        } else {
+          console.error(`notify: could not alert ${to}: ${err.message}`);
+        }
       }
     }
 
-    // Only start the cooldown if someone actually heard about it, so a total
-    // Twilio outage doesn't silence the next six hours of real alerts.
-    if (sent > 0) {
+    // Start the cooldown if someone heard about it, or if every failure was
+    // permanent — retrying those just burns an API call per failure. A
+    // transient outage leaves the cooldown unset so the next alert still tries.
+    if (sent > 0 || (permanent > 0 && permanent === adminNumbers.length)) {
       state[key] = new Date().toISOString();
       writeState(state);
     }
@@ -112,4 +135,4 @@ async function notifyAdmins(key, body) {
   }
 }
 
-module.exports = { sendSms, notifyAdmins, isConfigured, STATE_FILE };
+module.exports = { sendSms, notifyAdmins, isConfigured, isPermanentFailure, STATE_FILE };

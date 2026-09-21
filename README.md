@@ -485,13 +485,37 @@ A reminder that fails to print is texted to whoever set it and then dropped from
 the queue — but only once the text is away. If the SMS fails too it stays queued
 for the next sweep, so a Twilio hiccup can't be what destroys a reminder.
 
+### Opt-out and unknown senders
+
+Texts from numbers not on `ALLOWED_NUMBERS` get an empty TwiML response: Twilio
+sees a clean 200 and sends nothing back. Replying would bill an outbound message
+to a stranger — a wrong number, or a spammer probing the line — and unsolicited
+traffic to numbers that never opted in is what carrier filtering scores an A2P
+campaign on. The rejection is logged instead.
+
+STOP is handled by Twilio at the carrier level, so there's no opt-out list to
+maintain here. What the service does is notice: a send to someone who opted out
+fails with code **21610**, and that's treated as permanent rather than retried.
+
+- An admin who texted STOP is named in the log with what to do about it, and the
+  alert's cooldown still starts, so a dead address can't cause an API call per
+  failure.
+- A reminder whose sender opted out is marked `smsUndeliverable` and keeps
+  retrying the **printer** only — without that it would re-attempt a guaranteed
+  Twilio failure every minute, forever.
+
+Opting back in requires the person to text START; nothing here can do it for
+them. A genuinely transient failure (network blip, Twilio outage) is still
+retried normally — only the permanent codes are given up on.
+
 ---
 
 ## Usage
 
 Text any message to your Twilio number from an allowed phone number. It gets
 wrapped in an ASCII border with a timestamp and printed. You get a confirmation
-text back; numbers not on the allowlist are rejected.
+text back. Texts from numbers **not** on the allowlist are dropped silently — no
+reply, just a line in the log (see [Opt-out and unknown senders](#opt-out-and-unknown-senders)).
 
 ### Photos
 

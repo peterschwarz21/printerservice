@@ -11,7 +11,7 @@ require('dotenv').config();
 
 const { readAll, writeAll } = require('./src/reminders-store');
 const { printMessage } = require('./src/printer');
-const { sendSms } = require('./src/notify');
+const { sendSms, isPermanentFailure } = require('./src/notify');
 
 async function main() {
   const all = readAll();
@@ -41,15 +41,27 @@ async function main() {
       console.error(`Failed to print reminder ${r.id}: ${err.message} — trying SMS`);
     }
 
+    // Someone who texted STOP can never receive the fallback, so don't spend an
+    // API call rediscovering that every minute — keep retrying the printer only.
+    if (r.smsUndeliverable) {
+      failed.push(r);
+      continue;
+    }
+
     try {
       // Label it, so an unexpected text reads as the reminder it is.
       const sid = await sendSms(r.from, `⏰ Reminder (printer offline): ${r.body}`);
       console.log(`Texted reminder ${r.id} to ${r.from} (${sid})`);
     } catch (err) {
-      // Drop it only once it has actually reached them; a Twilio hiccup must
-      // not be what destroys the reminder.
-      console.error(`Failed to text reminder ${r.id}: ${err.message} — will retry`);
-      failed.push(r);
+      if (isPermanentFailure(err)) {
+        console.error(`Reminder ${r.id}: ${r.from} cannot receive SMS (${err.message}) — will keep retrying the printer only`);
+        failed.push({ ...r, smsUndeliverable: true });
+      } else {
+        // Drop it only once it has actually reached them; a Twilio hiccup must
+        // not be what destroys the reminder.
+        console.error(`Failed to text reminder ${r.id}: ${err.message} — will retry`);
+        failed.push(r);
+      }
     }
   }
 

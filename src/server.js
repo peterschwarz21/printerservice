@@ -22,6 +22,13 @@ function twimlReply(res, message) {
   res.type('text/xml').send(twiml.toString());
 }
 
+// A valid TwiML document with no message in it: Twilio sees a clean 200 and
+// sends nothing back. Used for senders we don't want to answer at all.
+function twimlSilence(res) {
+  const twiml = new twilio.twiml.MessagingResponse();
+  res.type('text/xml').send(twiml.toString());
+}
+
 // Download each image attachment from Twilio and print it. Returns a status
 // object describing what happened so the caller can pick a reply.
 async function handleMedia(numMedia, body, from, caption) {
@@ -75,8 +82,12 @@ app.post('/webhook', (req, res) => {
   const body = (req.body.Body || '').trim();
 
   if (!isAllowed(from)) {
+    // Deliberately silent. Replying would bill an outbound message to a
+    // stranger — a wrong number, or a spammer probing the line — and
+    // unsolicited traffic to numbers that never opted in is exactly what
+    // carrier filtering scores an A2P campaign on. The log is the record.
     console.log(`Rejected message from unauthorized number: ${from}`);
-    return twimlReply(res, '🚫 Sorry, your number is not on the printer allowlist.');
+    return twimlSilence(res);
   }
 
   // MMS: an image (with optional caption) prints as a photo. Check before the
