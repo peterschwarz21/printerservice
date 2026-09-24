@@ -190,6 +190,43 @@ async function fetchCalendar(token, calendar, timeMin, timeMax) {
 }
 
 // ---------------------------------------------------------------------------
+// DEDUPE
+// ---------------------------------------------------------------------------
+// The same real-world event often sits on several calendars (a shared dinner,
+// a kid's game both parents track). Each copy is a separate Google event, so
+// without this it prints once per calendar. Match on normalized title + exact
+// start/end, and merge the copies into one line tagged with every calendar it
+// came from: [T] + [P] -> [T/P].
+function dedupeKey(ev) {
+  const title = ev.title.toLowerCase().replace(/\s+/g, ' ').trim();
+  // All-day events carry no start (fetchCalendar only reads start.dateTime)
+  // and the fetch window is a single day, so the title alone identifies them.
+  if (ev.allDay) return `allday|${title}`;
+  return `${ev.start.getTime()}|${ev.end ? ev.end.getTime() : ''}|${title}`;
+}
+
+function dedupeEvents(events) {
+  const byKey = new Map();
+  for (const ev of events) {
+    const key = dedupeKey(ev);
+    const seen = byKey.get(key);
+    if (!seen) {
+      // Copy, so merging never mutates the objects fetchCalendar returned.
+      byKey.set(key, { ...ev, labels: [ev.label] });
+      continue;
+    }
+    if (!seen.labels.includes(ev.label)) seen.labels.push(ev.label);
+    // Copies differ in detail: the organizer's has the address, an invitee's
+    // is often bare. Keep the first non-empty value for each field.
+    seen.location    = seen.location    || ev.location;
+    seen.description = seen.description || ev.description;
+  }
+  // `events` arrives in CALENDAR_IDS order (Promise.allSettled preserves input
+  // order), so labels come out in config order — no sort needed.
+  return [...byKey.values()].map(({ labels, ...ev }) => ({ ...ev, label: labels.join('/') }));
+}
+
+// ---------------------------------------------------------------------------
 // FORMAT RECEIPT
 // ---------------------------------------------------------------------------
 function center(str) {
@@ -232,6 +269,11 @@ function formatReceipt(events, warnings) {
   const DIVIDER = '='.repeat(WIDTH);
   const THIN    = '-'.repeat(WIDTH);
 
+  // Merged events carry wider tags ([T/P]); pad them all to the widest so the
+  // titles line up. Seeded with 1 so an empty `events` can't yield -Infinity.
+  const tagWidth = Math.max(...events.map((ev) => ev.label.length), 1) + 2;
+  const tag = (ev) => `[${ev.label}]`.padEnd(tagWidth);
+
   const allDay = events.filter((ev) => ev.allDay);
   const timed  = events
     .filter((ev) => !ev.allDay)
@@ -253,7 +295,7 @@ function formatReceipt(events, warnings) {
   if (allDay.length > 0) {
     lines.push('ALL DAY', THIN);
     for (const ev of allDay) {
-      lines.push(...eventLines(` [${ev.label}] `, ev));
+      lines.push(...eventLines(` ${tag(ev)} `, ev));
     }
     lines.push('');
   }
@@ -264,7 +306,7 @@ function formatReceipt(events, warnings) {
       const time = ev.end
         ? `${formatTime(ev.start)}-${formatTime(ev.end).trimStart()}`
         : formatTime(ev.start);
-      lines.push(...eventLines(`${time.padEnd(13)} [${ev.label}] `, ev));
+      lines.push(...eventLines(`${time.padEnd(13)} ${tag(ev)} `, ev));
     }
     lines.push('');
   }
@@ -323,16 +365,21 @@ async function main() {
   );
 
   // One broken calendar (revoked share, typo'd ID) shouldn't kill the receipt
-  const events = [];
+  const collected = [];
   const warnings = [];
   results.forEach((result, i) => {
     if (result.status === 'fulfilled') {
-      events.push(...result.value);
+      collected.push(...result.value);
     } else {
       console.error(`Calendar [${calendars[i].label}] failed:`, result.reason.message);
       warnings.push(`Could not load calendar [${calendars[i].label}] (${result.reason.message})`);
     }
   });
+
+  const events = dedupeEvents(collected);
+  if (events.length < collected.length) {
+    console.log(`Merged ${collected.length - events.length} duplicate event(s) across calendars.`);
+  }
 
   // Nothing worth printing: no events and no calendar failures to report.
   // Skip the receipt entirely so an empty day doesn't waste paper.
@@ -353,10 +400,16 @@ async function main() {
   console.log(`Print server responded with HTTP ${status}`);
 }
 
-main().catch(async (err) => {
-  // fetch() wraps the real network error (e.g. ECONNREFUSED) in err.cause
-  console.error('Error:', err.message, err.cause ? `(${err.cause})` : '');
-  // await, not fire-and-forget: process.exit kills the in-flight request.
-  await notifyAdmins('cron:calendar', `Calendar receipt failed: ${err.message}`);
-  process.exit(1);
-});
+// Guarded so the dedupe helpers can be required and exercised with fixtures;
+// running `node calendar.js` (and cron) is unchanged.
+if (require.main === module) {
+  main().catch(async (err) => {
+    // fetch() wraps the real network error (e.g. ECONNREFUSED) in err.cause
+    console.error('Error:', err.message, err.cause ? `(${err.cause})` : '');
+    // await, not fire-and-forget: process.exit kills the in-flight request.
+    await notifyAdmins('cron:calendar', `Calendar receipt failed: ${err.message}`);
+    process.exit(1);
+  });
+} else {
+  module.exports = { dedupeEvents, dedupeKey, formatReceipt };
+}
