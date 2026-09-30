@@ -11,6 +11,7 @@
 require('dotenv').config();
 
 const { notifyAdmins } = require('./src/notify');
+const { getVacation, describeVacation } = require('./src/vacation');
 
 // ---------------------------------------------------------------------------
 // CONFIG (from .env)
@@ -347,6 +348,12 @@ async function sendToPrinter(content) {
 // MAIN
 // ---------------------------------------------------------------------------
 async function main() {
+  const vacation = getVacation();
+  if (vacation) {
+    console.log(`Vacation mode is on (${describeVacation(vacation)}) — skipping the gameday receipt`);
+    return;
+  }
+
   if (TEAMS.length === 0) throw new Error('NFL_TEAMS is empty — set it in .env');
 
   const todayStr = today();

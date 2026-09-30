@@ -8,6 +8,7 @@
 require('dotenv').config();
 
 const { notifyAdmins } = require('./src/notify');
+const { getVacation, describeVacation } = require('./src/vacation');
 
 // ---------------------------------------------------------------------------
 // CONFIG (from .env)
@@ -173,6 +174,12 @@ async function sendToPrinter(content) {
 // MAIN
 // ---------------------------------------------------------------------------
 async function main() {
+  const vacation = getVacation();
+  if (vacation) {
+    console.log(`Vacation mode is on (${describeVacation(vacation)}) — skipping the weather receipt`);
+    return;
+  }
+
   console.log("Fetching weather...");
   const data = await fetchWeather();
 

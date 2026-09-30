@@ -7,6 +7,7 @@ const { printMessage, printImage } = require('./printer');
 const { parseReminder, TIMEZONE } = require('./reminder-parser');
 const { addReminder, readAll, removeReminder, handleOf } = require('./reminders-store');
 const { notifyAdmins, sendSms, isPermanentFailure } = require('./notify');
+const { getVacation, startVacation, endVacation, parseVacationEnd, describeVacation } = require('./vacation');
 
 const app = express();
 app.set('trust proxy', true);
@@ -99,7 +100,16 @@ function formatWhen(iso) {
   });
 }
 
-const HELP = 'Commands: /status, /list, /cancel <id>, /help';
+const HELP = 'Commands: /status, /list, /cancel <id>, /vacation [on|off|until <date>], /help';
+
+const VACATION_USAGE = 'Usage: /vacation on, /vacation off, or /vacation until <date> (e.g. "until Oct 12")';
+
+// Appended to replies while vacation mode is on. Texts still print, but the
+// sender should know nobody is home to see them. Empty string when off.
+function vacationNote() {
+  const v = getVacation();
+  return v ? ` (🏝️ Heads up: we're away ${describeVacation(v)} — it'll be waiting when we're back.)` : '';
+}
 
 // Admin-only, checked by the caller. Returns true if the message was a command
 // and a reply has been sent; false to let it fall through and print normally.
@@ -118,7 +128,34 @@ async function handleCommand(body, res) {
         ? `🕐 Last print: ${formatWhen(health.last_print_at)}`
         : '🕐 Last print: none since restart';
       const noun = pending.length === 1 ? 'reminder' : 'reminders';
-      twimlReply(res, `${printer}\n${last}\n⏰ ${pending.length} ${noun} pending`);
+      const lines = [printer, last, `⏰ ${pending.length} ${noun} pending`];
+      const vacation = getVacation();
+      if (vacation) lines.push(`🏝️ Vacation: ${describeVacation(vacation)}`);
+      twimlReply(res, lines.join('\n'));
+      return true;
+    }
+
+    case '/vacation': {
+      const mode = arg.toLowerCase();
+      if (!mode) {
+        const v = getVacation();
+        return twimlReply(res, v
+          ? `🏝️ Vacation mode is ON ${describeVacation(v)}. Scheduled printing is paused.`
+          : '🏠 Vacation mode is OFF.'), true;
+      }
+      if (mode === 'off') {
+        endVacation();
+        console.log('Vacation mode off');
+        return twimlReply(res, '👋 Welcome back — vacation mode is off, scheduled printing resumed.'), true;
+      }
+      let until = null;
+      if (mode !== 'on') {
+        until = parseVacationEnd(arg.replace(/^until\s+/i, ''), new Date());
+        if (!until) return twimlReply(res, `❓ Couldn't read a future date from "${arg}". ${VACATION_USAGE}`), true;
+      }
+      const v = startVacation(until);
+      console.log(`Vacation mode on ${describeVacation(v)}`);
+      twimlReply(res, `🏝️ Vacation mode is ON ${describeVacation(v)}. Daily receipts and weather alerts are paused, due reminders will be texted, and texts still print.`);
       return true;
     }
 
@@ -181,7 +218,7 @@ app.post('/webhook', (req, res) => {
     // written after that window is simply discarded — which is how a failed
     // photo print used to end in silence. Only bad news gets a follow-up; a
     // photo that prints announces itself on paper.
-    twimlReply(res, '📷 Got it — working on that now…');
+    twimlReply(res, `📷 Got it — working on that now…${vacationNote()}`);
 
     handleMedia(numMedia, req.body, from, body)
       .then(({ printed, hadNonImage }) => {
@@ -228,14 +265,18 @@ app.post('/webhook', (req, res) => {
       hour: 'numeric', minute: '2-digit', hour12: true, timeZone: TIMEZONE,
     });
     console.log(`Scheduled reminder from ${from} for ${when}: "${reminderBody}"`);
-    return twimlReply(res, `⏰ Reminder set for ${when}: "${reminderBody}"`);
+    const vacation = getVacation();
+    const aside = vacation && (!vacation.until || fireAt < new Date(vacation.until))
+      ? ' — 🏝️ vacation mode is on, so it will be texted to you instead of printed.'
+      : '';
+    return twimlReply(res, `⏰ Reminder set for ${when}: "${reminderBody}"${aside}`);
   }
 
   console.log(`Printing message from ${from}: "${body}"`);
 
   printMessage(body, from)
     .then(() => {
-      twimlReply(res, '✅ Printed!');
+      twimlReply(res, `✅ Printed!${vacationNote()}`);
     })
     .catch((err) => {
       console.error('Printer error:', err.message);

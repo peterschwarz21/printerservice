@@ -90,4 +90,4 @@ function parseReminder(text, now = new Date()) {
   return { fireAt, body };
 }
 
-module.exports = { parseReminder, TIMEZONE };
+module.exports = { parseReminder, TIMEZONE, localDateStr, tzOffsetMinutes, zonedWallToUtc };

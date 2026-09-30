@@ -13,6 +13,7 @@ const path = require('path');
 
 const { messageAdmins, notifyAdmins } = require('./src/notify');
 const { printMessage } = require('./src/printer');
+const { getVacation, describeVacation } = require('./src/vacation');
 
 // ---------------------------------------------------------------------------
 // CONFIG (from .env)
@@ -111,6 +112,14 @@ function formatSms(p) {
 // MAIN
 // ---------------------------------------------------------------------------
 async function main() {
+  // Paused entirely while away. Returns before touching the seen list, so a
+  // warning still in effect when vacation ends is alerted on the next run.
+  const vacation = getVacation();
+  if (vacation) {
+    console.log(`Vacation mode is on (${describeVacation(vacation)}) — skipping the NWS alert check`);
+    return;
+  }
+
   console.log(`Checking NWS alerts for ${LAT},${LON}...`);
   const alerts = await fetchAlerts();
   const seen = readSeen();

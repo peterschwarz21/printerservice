@@ -10,6 +10,7 @@
 require('dotenv').config();
 
 const { notifyAdmins } = require('./src/notify');
+const { getVacation, describeVacation } = require('./src/vacation');
 
 const fs = require('fs');
 const path = require('path');
@@ -349,6 +350,12 @@ async function sendToPrinter(content) {
 // MAIN
 // ---------------------------------------------------------------------------
 async function main() {
+  const vacation = getVacation();
+  if (vacation) {
+    console.log(`Vacation mode is on (${describeVacation(vacation)}) — skipping the calendar receipt`);
+    return;
+  }
+
   if (!CLIENT_ID || !CLIENT_SECRET) {
     throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in .env (see README)');
   }

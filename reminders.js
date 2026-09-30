@@ -12,6 +12,7 @@ require('dotenv').config();
 const { readAll, writeAll } = require('./src/reminders-store');
 const { printMessage } = require('./src/printer');
 const { sendSms, isPermanentFailure } = require('./src/notify');
+const { getVacation } = require('./src/vacation');
 
 async function main() {
   const all = readAll();
@@ -31,14 +32,19 @@ async function main() {
   // Print each due reminder. If the printer is down the reminder is already
   // late, so fall back to texting it — the content is the point, the paper
   // isn't. Anything we can neither print nor text stays queued for the next run.
+  // On vacation nobody is home to read the paper, so go straight to the text.
+  const onVacation = Boolean(getVacation());
+  if (onVacation) console.log('Vacation mode is on — texting due reminders instead of printing');
   const failed = [];
   for (const r of due) {
-    try {
-      await printMessage(r.body, r.from, { header: 'REMINDER' });
-      console.log(`Printed reminder ${r.id}: "${r.body}"`);
-      continue;
-    } catch (err) {
-      console.error(`Failed to print reminder ${r.id}: ${err.message} — trying SMS`);
+    if (!onVacation) {
+      try {
+        await printMessage(r.body, r.from, { header: 'REMINDER' });
+        console.log(`Printed reminder ${r.id}: "${r.body}"`);
+        continue;
+      } catch (err) {
+        console.error(`Failed to print reminder ${r.id}: ${err.message} — trying SMS`);
+      }
     }
 
     // Someone who texted STOP can never receive the fallback, so don't spend an
@@ -50,7 +56,8 @@ async function main() {
 
     try {
       // Label it, so an unexpected text reads as the reminder it is.
-      const sid = await sendSms(r.from, `⏰ Reminder (printer offline): ${r.body}`);
+      const why = onVacation ? 'vacation mode' : 'printer offline';
+      const sid = await sendSms(r.from, `⏰ Reminder (${why}): ${r.body}`);
       console.log(`Texted reminder ${r.id} to ${r.from} (${sid})`);
     } catch (err) {
       if (isPermanentFailure(err)) {
