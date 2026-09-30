@@ -145,10 +145,11 @@ Edit `.env` — a single file shared by **all** services:
 |---|---|
 | `TWILIO_AUTH_TOKEN` | From your [Twilio Console](https://console.twilio.com); used to validate webhooks |
 | `TWILIO_PHONE_NUMBER` | Your Twilio number in E.164 (informational) |
-| `ALLOWED_NUMBERS` | Comma-separated E.164 numbers allowed to print |
+| `ALLOWED_NUMBERS` | Comma-separated E.164 numbers allowed to print; new ones get a [welcome text](#welcoming-new-people) |
 | `TWILIO_MESSAGING_SERVICE_SID` | Messaging Service the A2P 10DLC campaign is attached to; required to send outbound |
 | `ADMIN_NUMBERS` | Comma-separated E.164 numbers paged when a job fails (see [failure alerts](#adding-failure-alerts-to-an-already-running-instance)); empty disables alerting |
 | `NOTIFY_COOLDOWN_MINUTES` | Optional; quiet period per failure type (default `360`) |
+| `WELCOME_MESSAGE` | Optional; replaces the default [welcome text](#welcoming-new-people) |
 | `NWS_USER_AGENT` | Contact string for api.weather.gov (it returns 403 without one) |
 | `NWS_SEVERITIES` | Optional; alert severities (default `Extreme,Severe`) |
 | `NWS_URGENCIES` | Optional; alert urgencies (default `Immediate,Expected`) |
@@ -624,6 +625,42 @@ sudo systemctl restart sms-listener
 
 ---
 
+## Welcoming new people
+
+Add someone to `ALLOWED_NUMBERS` and restart the webhook — they get a welcome
+text explaining what the number does, and `ADMIN_NUMBERS` get a summary of who
+was welcomed:
+
+```bash
+# edit .env: ALLOWED_NUMBERS=+15559876543,+15551112222
+sudo systemctl restart sms-listener
+```
+
+The default text is written to double as the A2P opt-in confirmation (what it
+is, HELP/STOP, rates may apply) and avoids emoji so it stays two GSM-7 segments.
+Set `WELCOME_MESSAGE` in `.env` to use your own — keep the STOP line.
+
+To send it to everyone, or preview first:
+
+```bash
+node welcome.js --dry-run        # who would get it, and the text; sends nothing
+node welcome.js --all --dry-run
+node welcome.js --all            # text everyone on ALLOWED_NUMBERS
+node welcome.js                  # just the new numbers (same as a restart does)
+```
+
+Who has been welcomed lives in `welcomed.json` (gitignored). A few details:
+
+- **First run:** the numbers already on the list are recorded *without* texting
+  them, so deploying this doesn't surprise the household. Use `--all` if you do
+  want everyone to get it.
+- **Opted out:** a number that has texted STOP (Twilio error 21610) is recorded
+  as `opted-out` and not retried; the admin summary names it.
+- **Couldn't send:** a transient failure isn't recorded, so the next restart (or
+  `node welcome.js`) tries again.
+- **Removed:** taking a number off `ALLOWED_NUMBERS` forgets it, so adding it back
+  later sends the welcome again.
+
 ---
 
 ## Usage
@@ -709,6 +746,7 @@ printerservice/
 │   ├── reminders-store.js # JSON persistence for pending reminders
 │   ├── notify.js          # Outbound SMS + rate-limited failure alerts
 │   ├── vacation.js        # Vacation-mode state (pauses scheduled printing)
+│   ├── welcome.js         # Welcome texts for newly allowlisted numbers
 │   └── allowlist.js       # Phone number lists (allowlist + admins)
 ├── printer/
 │   ├── print_server.py    # Flask ESC/POS print server (USB)
@@ -724,6 +762,7 @@ printerservice/
 ├── gameday.js             # NFL gameday receipts via ESPN (cron, game days only)
 ├── weatheralert.js        # Severe NWS weather alerts (cron, 1/15min, only when active)
 ├── reminders.js           # Prints due "remind me" reminders (cron, every minute)
+├── welcome.js             # Welcome text to new (or --all) allowlisted numbers
 ├── authorize.js           # One-time Google OAuth setup (run on a laptop)
 ├── ngrok.yml.example      # ngrok static-domain config template
 ├── .env.example           # Shared config template

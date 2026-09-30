@@ -8,6 +8,7 @@ const { parseReminder, TIMEZONE } = require('./reminder-parser');
 const { addReminder, readAll, removeReminder, handleOf } = require('./reminders-store');
 const { notifyAdmins, sendSms, isPermanentFailure } = require('./notify');
 const { getVacation, startVacation, endVacation, parseVacationEnd, describeVacation } = require('./vacation');
+const { welcome } = require('./welcome');
 
 const app = express();
 app.set('trust proxy', true);
@@ -290,4 +291,7 @@ app.post('/webhook', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🖨️  Thermal print webhook listening on http://localhost:${PORT}/webhook`);
   console.log(`   Point your Twilio number's webhook to: https://<ngrok-id>.ngrok.io/webhook`);
+  // An ALLOWED_NUMBERS edit only takes effect on restart, so this is the moment
+  // someone new appears. Not awaited, and welcome() never throws.
+  welcome();
 });

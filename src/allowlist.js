@@ -22,4 +22,4 @@ function isAdmin(phoneNumber) {
   return adminNumbers.includes(phoneNumber);
 }
 
-module.exports = { isAllowed, isAdmin, parseNumbers, adminNumbers };
+module.exports = { isAllowed, isAdmin, parseNumbers, allowedNumbers, adminNumbers };

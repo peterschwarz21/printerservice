@@ -5,6 +5,7 @@ reminders.json
 notify-state.json
 weather-alerts.json
 vacation.json
+welcomed.json
 .venv/
 ngrok.yml
 *.log
