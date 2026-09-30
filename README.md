@@ -543,6 +543,7 @@ Text these from a number in `ADMIN_NUMBERS`:
 | `/status` | Whether the printer is reachable, when it last printed, how many reminders are pending |
 | `/list` | Pending reminders, soonest first, each with a short id |
 | `/cancel <id>` | Cancels that reminder (ids come from `/list`) |
+| `/vacation on` / `off` / `until <date>` | Pauses scheduled printing while you're away (see [Vacation mode](#vacation-mode)); `/vacation` alone shows the current state |
 | `/help` | The list of commands |
 
 Replies are TwiML, so they ride the inbound webhook and cost nothing extra.
@@ -580,6 +581,46 @@ Two filters keep the volume sane, both tunable in `.env`:
 
 An event is only marked as seen after the text goes out, so if a send fails the
 next run tries again rather than silently swallowing the warning.
+
+---
+
+## Vacation mode
+
+Traveling? Text `/vacation` from an admin number so the printer doesn't spend the
+trip spooling receipts into an empty house.
+
+```
+/vacation on              -> on until you turn it off
+/vacation until Oct 12    -> on, and switches itself off at midnight starting Oct 12
+/vacation until Oct 12 6pm
+/vacation off             -> back to normal
+/vacation                 -> is it on, and until when?
+```
+
+While it's on:
+
+| | |
+|---|---|
+| Daily receipts (weather, calendar, poem, gameday) | Skipped |
+| Severe weather alerts | Paused entirely — no text, no print |
+| Reminders that come due | Texted to whoever set them instead of printed |
+| Texts and photos from the household | **Still print**, and the reply adds a note that you're away |
+
+A bare date ends vacation at midnight *starting* that day, so the morning
+receipts are waiting when you get home; give a time (`until Oct 12 6pm`) if you
+land late. `/status` shows the vacation line while it's on.
+
+A weather warning that's still in effect when vacation ends is alerted on the
+next 15-minute run — paused checks don't mark anything as seen.
+
+State lives in `vacation.json` (gitignored). Every cron job reads it fresh, so
+adding the feature to a running instance only needs the webhook restarted:
+
+```bash
+cd /home/admin/printerservice
+git pull
+sudo systemctl restart sms-listener
+```
 
 ---
 
@@ -667,6 +708,7 @@ printerservice/
 │   ├── reminder-parser.js # Parses "remind me ..." texts (chrono-node)
 │   ├── reminders-store.js # JSON persistence for pending reminders
 │   ├── notify.js          # Outbound SMS + rate-limited failure alerts
+│   ├── vacation.js        # Vacation-mode state (pauses scheduled printing)
 │   └── allowlist.js       # Phone number lists (allowlist + admins)
 ├── printer/
 │   ├── print_server.py    # Flask ESC/POS print server (USB)
